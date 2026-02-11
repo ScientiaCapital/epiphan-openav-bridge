@@ -1,0 +1,12 @@
+# epiphan-openav-bridge Phase 1: RTSP Compatibility Proof
+#
+# No Python package dependencies — this script uses only the standard library.
+# System dependencies (must be installed separately):
+#
+#   ffmpeg   — stream recording (https://ffmpeg.org/)
+#   ffprobe  — stream analysis (bundled with ffmpeg)
+#
+# Install ffmpeg:
+#   macOS:   brew install ffmpeg
+#   Ubuntu:  sudo apt install ffmpeg
+#   Windows: https://ffmpeg.org/download.html
