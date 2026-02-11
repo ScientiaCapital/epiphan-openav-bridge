@@ -1,3 +1,6 @@
 [submodule "openav-epiphan-pearl/source/microservice-framework"]
 	path = openav-epiphan-pearl/source/microservice-framework
 	url = https://github.com/Dartmouth-OpenAV/microservice-framework.git
+[submodule "openav-epiphan-ec20/source/microservice-framework"]
+	path = openav-epiphan-ec20/source/microservice-framework
+	url = https://github.com/Dartmouth-OpenAV/microservice-framework.git
