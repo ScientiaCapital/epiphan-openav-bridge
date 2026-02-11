@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Test recordings
+proof/*.mp4
+proof/*.mkv
+proof/*.ts
+proof/*.json
+
+# Internal project docs (local reference only)
+CLAUDE.md
+REQUIREMENTS.md
+PROJECT_PLAN.md
+BRIEF.md
+ROADMAP.md
+01-01-PLAN.md
+.planning/
+
+# Serena
+.serena/
