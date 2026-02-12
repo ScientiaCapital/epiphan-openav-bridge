@@ -1,0 +1,33 @@
+services:
+  orchestrator:
+    image: ghcr.io/dartmouth-openav/orchestrator:latest
+    ports:
+      - "8080:80"
+    environment:
+      - ADDRESS_MICROSERVICES_BY_NAME=true
+      - SYSTEM_CONFIGURATIONS_VIA_VOLUME=true
+      - SYSTEM_CONFIGURATIONS_INSTANT_REFRESH=true
+      - DNS_HARD_CACHE=false
+      - LOG_ERRORS=true
+    volumes:
+      - ./system-configs:/system_configurations
+    networks:
+      - openav
+
+  microservice-epiphan-pearl:
+    build:
+      context: ../openav-epiphan-pearl
+      dockerfile: Dockerfile
+    networks:
+      - openav
+
+  microservice-epiphan-ec20:
+    build:
+      context: ../openav-epiphan-ec20
+      dockerfile: Dockerfile
+    networks:
+      - openav
+
+networks:
+  openav:
+    driver: bridge

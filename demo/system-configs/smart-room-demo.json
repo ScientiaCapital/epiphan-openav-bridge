@@ -1,0 +1,117 @@
+{
+  "system_name": "Smart Room Demo",
+  "control_sets": {
+    "recording": {
+      "name": "Recording",
+      "icon": "screen",
+      "controls": {
+        "record": {
+          "type": "power",
+          "channel": "main",
+          "value": {
+            "set": [
+              {
+                "driver": "dartmouth-openav/microservice-epiphan-pearl:current/admin:password@pearl-host/recording",
+                "method": "PUT",
+                "body": "\"$on_or_off\"",
+                "headers": [
+                  "content-type: application/json"
+                ]
+              }
+            ],
+            "set_process": {
+              "true": {
+                "on_or_off": "start"
+              },
+              "false": {
+                "on_or_off": "stop"
+              }
+            },
+            "get": [
+              "dartmouth-openav/microservice-epiphan-pearl:current/admin:password@pearl-host/recordingstatus"
+            ],
+            "get_process": [
+              "recording"
+            ]
+          }
+        },
+        "streaming": {
+          "type": "power",
+          "channel": "main",
+          "value": {
+            "set": [
+              {
+                "driver": "dartmouth-openav/microservice-epiphan-pearl:current/admin:password@pearl-host/streaming/1",
+                "method": "PUT",
+                "body": "\"$on_or_off\"",
+                "headers": [
+                  "content-type: application/json"
+                ]
+              }
+            ],
+            "set_process": {
+              "true": {
+                "on_or_off": "start"
+              },
+              "false": {
+                "on_or_off": "stop"
+              }
+            }
+          }
+        }
+      }
+    },
+    "camera": {
+      "name": "Camera",
+      "icon": "camera",
+      "controls": {
+        "tracking": {
+          "type": "power",
+          "channel": "main",
+          "value": {
+            "set": [
+              {
+                "driver": "dartmouth-openav/microservice-epiphan-ec20:current/admin:password@ec20-host/tracking",
+                "method": "PUT",
+                "body": "\"$on_or_off\"",
+                "headers": [
+                  "content-type: application/json"
+                ]
+              }
+            ],
+            "set_process": {
+              "true": {
+                "on_or_off": "enable"
+              },
+              "false": {
+                "on_or_off": "disable"
+              }
+            },
+            "get": [
+              "dartmouth-openav/microservice-epiphan-ec20:current/admin:password@ec20-host/status"
+            ],
+            "get_process": [
+              "tracking"
+            ]
+          }
+        },
+        "ptz_home": {
+          "type": "button",
+          "channel": "main",
+          "value": {
+            "set": [
+              {
+                "driver": "dartmouth-openav/microservice-epiphan-ec20:current/admin:password@ec20-host/ptzhome",
+                "method": "PUT",
+                "body": "\"\"",
+                "headers": [
+                  "content-type: application/json"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

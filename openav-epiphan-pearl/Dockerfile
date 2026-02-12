@@ -10,7 +10,7 @@ RUN go mod tidy
 
 WORKDIR /go
 # Change the module path for each microservice
-RUN go mod init github.com/scientiacapital/openav-epiphan-pearl
+RUN go mod init github.com/Dartmouth-OpenAV/microservice-epiphan-pearl
 RUN go mod edit -replace github.com/Dartmouth-OpenAV/microservice-framework=./src/microservice-framework
 RUN go mod tidy
 
