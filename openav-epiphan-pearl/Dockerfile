@@ -5,6 +5,7 @@ COPY source /go/src
 ENV GOPATH=
 
 WORKDIR /go/src/microservice-framework
+RUN rm -f go.mod go.sum
 RUN go mod init github.com/Dartmouth-OpenAV/microservice-framework
 RUN go mod tidy
 

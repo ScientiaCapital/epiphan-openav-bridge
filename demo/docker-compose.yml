@@ -11,6 +11,7 @@ services:
       - LOG_ERRORS=true
     volumes:
       - ./system-configs:/system_configurations
+      - ./authorization.json:/authorization.json:ro
     networks:
       - openav
 
