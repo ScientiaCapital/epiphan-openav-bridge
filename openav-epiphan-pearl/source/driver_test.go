@@ -864,3 +864,70 @@ func TestPearlAPIGet_NonOKStatus(t *testing.T) {
 		t.Errorf("expected '404' in error, got: %v", err)
 	}
 }
+
+// ========== validateChannelID tests ==========
+
+func TestValidateChannelID_Valid(t *testing.T) {
+	tests := []struct {
+		name      string
+		channelID string
+	}{
+		{"single digit", "1"},
+		{"multiple digits", "123"},
+		{"with hyphen", "channel-1"},
+		{"with underscore", "my_channel"},
+		{"mixed case", "Channel123"},
+		{"max length", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateChannelID(tt.channelID)
+			if err != nil {
+				t.Errorf("expected no error for %s, got: %v", tt.channelID, err)
+			}
+		})
+	}
+}
+
+func TestValidateChannelID_Invalid(t *testing.T) {
+	tests := []struct {
+		name      string
+		channelID string
+	}{
+		{"empty string", ""},
+		{"path traversal", "../admin"},
+		{"slash in path", "channels/1"},
+		{"backslash", "a\\b"},
+		{"url encoded slash", "%2F"},
+		{"question mark", "a?b"},
+		{"hash", "a#b"},
+		{"ampersand", "a&b"},
+		{"space", "a b"},
+		{"null byte", "channel\x00admin"},
+		{"too long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateChannelID(tt.channelID)
+			if err == nil {
+				t.Errorf("expected error for %s, got nil", tt.channelID)
+			}
+		})
+	}
+}
+
+func TestControlStreaming_InvalidChannelID(t *testing.T) {
+	server := mockPearlAPI(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	_, err := controlStreaming(socketKey, "../admin", `"start"`)
+	if err == nil {
+		t.Fatal("expected error for path traversal in channelID")
+	}
+	if !strings.Contains(err.Error(), "invalid characters") {
+		t.Errorf("expected 'invalid characters' in error, got: %v", err)
+	}
+}

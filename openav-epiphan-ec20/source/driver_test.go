@@ -1309,3 +1309,92 @@ func TestDoDeviceSpecificSet_Unknown(t *testing.T) {
 		t.Errorf("expected 'unrecognized setting' in error, got: %v", err)
 	}
 }
+
+// ========== validatePresetID tests ==========
+
+func TestValidatePresetID_Valid(t *testing.T) {
+	tests := []struct {
+		name     string
+		presetID string
+	}{
+		{"minimum", "1"},
+		{"middle", "128"},
+		{"maximum", "255"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePresetID(tt.presetID)
+			if err != nil {
+				t.Errorf("expected no error for %s, got: %v", tt.presetID, err)
+			}
+		})
+	}
+}
+
+func TestValidatePresetID_Invalid(t *testing.T) {
+	tests := []struct {
+		name     string
+		presetID string
+	}{
+		{"empty string", ""},
+		{"zero", "0"},
+		{"negative", "-1"},
+		{"too large", "256"},
+		{"non-numeric", "abc"},
+		{"decimal", "1.5"},
+		{"hex", "0xFF"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePresetID(tt.presetID)
+			if err == nil {
+				t.Errorf("expected error for %s, got nil", tt.presetID)
+			}
+		})
+	}
+}
+
+func TestRecallPreset_InvalidPresetID(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	_, err := recallPreset(socketKey, "999")
+	if err == nil {
+		t.Fatal("expected error for out-of-range presetID")
+	}
+	if !strings.Contains(err.Error(), "out of range") {
+		t.Errorf("expected 'out of range' in error, got: %v", err)
+	}
+}
+
+func TestSavePreset_InvalidPresetID(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	_, err := savePreset(socketKey, "abc", "TestPreset")
+	if err == nil {
+		t.Fatal("expected error for non-numeric presetID")
+	}
+	if !strings.Contains(err.Error(), "must be numeric") {
+		t.Errorf("expected 'must be numeric' in error, got: %v", err)
+	}
+}
+
+func TestSavePreset_NameTooLong(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	longName := strings.Repeat("a", 65)
+	_, err := savePreset(socketKey, "1", longName)
+	if err == nil {
+		t.Fatal("expected error for name longer than 64 chars")
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Errorf("expected 'too long' in error, got: %v", err)
+	}
+}

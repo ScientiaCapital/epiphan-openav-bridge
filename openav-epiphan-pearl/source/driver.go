@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -31,6 +32,22 @@ func parseSocketKey(socketKey string) (host string, username string, password st
 	}
 
 	return
+}
+
+// validateChannelID ensures channelID is safe for URL path construction.
+// Only allows alphanumeric, hyphens, and underscores (max 64 chars).
+func validateChannelID(channelID string) error {
+	if channelID == "" {
+		return fmt.Errorf("channelID is empty")
+	}
+	if len(channelID) > 64 {
+		return fmt.Errorf("channelID too long: %d chars (max 64)", len(channelID))
+	}
+	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, channelID)
+	if !matched {
+		return fmt.Errorf("channelID contains invalid characters: %s", channelID)
+	}
+	return nil
 }
 
 // pearlAPIGet performs an authenticated GET request to the Pearl REST API v2.0.
@@ -316,6 +333,12 @@ func controlStreaming(socketKey string, channelID string, action string) (string
 
 	action = strings.Trim(action, `"`)
 	channelID = strings.Trim(channelID, `"`)
+
+	if err := validateChannelID(channelID); err != nil {
+		errMsg := function + " - " + err.Error()
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
 
 	switch action {
 	case "start":

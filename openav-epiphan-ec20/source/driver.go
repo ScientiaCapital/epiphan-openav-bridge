@@ -55,6 +55,18 @@ func parseSocketKey(socketKey string) (host string, username string, password st
 	return
 }
 
+// validatePresetID ensures presetID is a valid integer in range 1-255.
+func validatePresetID(presetID string) error {
+	id, err := strconv.Atoi(presetID)
+	if err != nil {
+		return fmt.Errorf("presetID must be numeric: %s", presetID)
+	}
+	if id < 1 || id > 255 {
+		return fmt.Errorf("presetID out of range (1-255): %d", id)
+	}
+	return nil
+}
+
 // ec20APIGet performs an authenticated GET request to the EC20 REST API.
 // Unlike Pearl, EC20 endpoints include the full path in constants (no /api/v2.0 prefix).
 // Tolerates responses without a "status" field since the EC20 response format is unknown.
@@ -496,6 +508,12 @@ func recallPreset(socketKey string, presetID string) (string, error) {
 
 	presetID = strings.Trim(presetID, `"`)
 
+	if err := validatePresetID(presetID); err != nil {
+		errMsg := function + " - " + err.Error()
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
+
 	_, err := ec20APIPostJSON(socketKey, ec20EndpointPresetGoto, map[string]interface{}{
 		"preset_id": presetID,
 	})
@@ -512,6 +530,18 @@ func savePreset(socketKey string, presetID string, name string) (string, error) 
 
 	presetID = strings.Trim(presetID, `"`)
 	name = strings.Trim(name, `"`)
+
+	if err := validatePresetID(presetID); err != nil {
+		errMsg := function + " - " + err.Error()
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
+
+	if len(name) > 64 {
+		errMsg := fmt.Sprintf(function+" - preset name too long: %d chars (max 64)", len(name))
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
 
 	_, err := ec20APIPostJSON(socketKey, ec20EndpointPresetSave, map[string]interface{}{
 		"preset_id": presetID,
