@@ -1,0 +1,68 @@
+# Demand Catalog — epiphan-openav-bridge
+# Pattern: disler/the-library — catalog-not-copy, load on demand
+# Skills and references are pointers, not embedded content.
+# Use: when /build says "use skills on-demand", consult this catalog.
+
+skills:
+  - name: go-openav-patterns
+    description: OpenAV framework GET/SET signatures, main() structure, Echo server, socket key format
+    source: local://openav-epiphan-pearl/source/microservice-framework/
+    notes: >
+      Framework is a git submodule. Key patterns: setFrameworkGlobals() → framework.Startup(),
+      GET/SET return (string, error), return JSON from GET and "ok" from SET.
+      framework.DoPost() is Sony-specific — Pearl/EC20 use custom HTTP with Basic Auth.
+
+  - name: pearl-api-mapping
+    description: Pearl REST API v2.0 endpoint mapping — verified against real hardware
+    source: local://openav-epiphan-pearl/source/driver.go
+    notes: >
+      All Pearl endpoints are CONFIRMED working. Swagger docs at
+      https://epiphan-video.github.io/pearl_api_swagger_ui/
+
+  - name: ec20-api-mapping
+    description: EC20 PTZ camera API endpoints — ALL PLACEHOLDERS, unverified
+    source: local://openav-epiphan-ec20/source/driver.go
+    notes: >
+      12 placeholder endpoints (lines 23-34). No public API docs exist.
+      See .claude/programs/ec20-api-discovery.md for discovery program.
+
+  - name: openav-sony-reference
+    description: Sony FPD driver — reference implementation for OpenAV patterns
+    source: local:///tmp/openav-sony-fpd/source/
+    notes: >
+      WARNING: /tmp/ path may not persist across reboots.
+      Key reference for how OpenAV drivers handle GET/SET,
+      error reporting, and framework integration.
+      If missing, clone from Dartmouth-OpenAV GitHub.
+
+agents:
+  - name: observer-full
+    description: 7-pattern drift detection + devil's advocate (Sonnet, <3 min)
+    source: .claude/agents/observer-full.md
+
+  - name: observer-lite
+    description: 4-check quick scan — secrets, tests, silent failures, debt (Haiku, <60s)
+    source: .claude/agents/observer-lite.md
+
+references:
+  - name: openav-wiki
+    description: Dartmouth-OpenAV architecture wiki — conventions, framework docs
+    url: https://github.com/Dartmouth-OpenAV/.github/wiki
+
+  - name: pearl-api-swagger
+    description: Epiphan Pearl API v2.0 Swagger UI — endpoint reference
+    url: https://epiphan-video.github.io/pearl_api_swagger_ui/
+
+  - name: pearl-api-guide
+    description: Epiphan Pearl API user guide
+    url: https://www.epiphan.com/userguides/pearl-api/
+
+  - name: ec20-product-page
+    description: EC20 product page — no API docs, but has feature descriptions
+    url: https://www.epiphan.com/products/ec20/
+
+programs:
+  - name: ec20-api-discovery
+    description: Autoresearch-style program for discovering EC20 REST API endpoints
+    source: .claude/programs/ec20-api-discovery.md
+    metric: HTTP 200 response (confirmed) vs 4xx (discard)

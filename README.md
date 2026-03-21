@@ -115,7 +115,10 @@ Contributions welcome. If you're running OpenAV at your institution and want to 
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+This project uses a dual-license structure:
+
+- **Root project** (proof scripts, demo, docs): MIT — see [LICENSE](LICENSE)
+- **Go microservices** (openav-epiphan-pearl, openav-epiphan-ec20): GPL-3.0 — matching the [Dartmouth-OpenAV](https://github.com/Dartmouth-OpenAV) framework they integrate with. See each microservice's `LICENSE` file.
 
 ## Acknowledgments
 

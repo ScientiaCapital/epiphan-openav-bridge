@@ -7,7 +7,7 @@ Open-source Go microservices letting Dartmouth's OpenAV control system natively 
 - **Primary**: Go (OpenAV convention — all microservices)
 - **Python**: Phase 1 RTSP proof scripts only (`proof/`)
 - **Containerization**: Docker (multi-stage builds)
-- **License**: GPL-3.0 (matching Dartmouth-OpenAV repos)
+- **License**: GPL-3.0 for microservices (matching Dartmouth-OpenAV repos), MIT for root project
 
 ## Directory Structure
 
@@ -16,17 +16,15 @@ proof/                    # Phase 1: RTSP compatibility proof (Python)
 openav-epiphan-pearl/     # Phase 2: Pearl Go microservice
 openav-epiphan-ec20/      # Phase 2: EC20 PTZ Go microservice
 demo/                     # Phase 3: docker-compose full-stack demo
+.claude/                  # Agent infrastructure (observers, commands, programs)
 ```
 
 ## Key Commands
 
 ```bash
-# Phase 1: Python RTSP proof
-cd proof && python rtsp_test.py --ec20-ip 192.168.x.x --pearl-ip 192.168.x.x
-
-# Phase 2: Go microservices
-cd openav-epiphan-pearl && go mod tidy && go test ./... && go build -o pearl-service .
-cd openav-epiphan-ec20 && go mod tidy && go test ./... && go build -o ec20-service .
+# Phase 2: Go microservices (must export PATH="/opt/homebrew/bin:$PATH" first)
+cd openav-epiphan-pearl && go test ./source/ -v
+cd openav-epiphan-ec20 && go test ./source/ -v
 
 # Docker builds
 docker build -t openav-epiphan-pearl ./openav-epiphan-pearl
@@ -59,8 +57,38 @@ LOG_LEVEL=info
 - No proprietary dependencies (GPL-3.0 compatibility)
 - No hardcoded credentials — env vars only
 
+## Decision Rules (Executable Spec)
+
+When encountering these situations, follow the specified protocol:
+
+### Observer Workflow
+- **Before writing any code:** Check if observers have run this session. If QUALITY.md still shows "_not yet run_", spawn observer-lite first.
+- **When observer finds [BLOCKER]:** Stop work immediately. Disposition the blocker before continuing.
+- **When observer finds [WARNING]:** Log to backlog with owner and ETA, then continue.
+- **After >5 files modified:** Consider upgrading from observer-lite to observer-full.
+
+### EC20 API Endpoints
+- **All 12 EC20 endpoint paths are PLACEHOLDER** — see `.claude/programs/ec20-api-discovery.md`
+- **When EC20 hardware is available:** Run the discovery program before writing new EC20 features.
+- **When probing an endpoint:** One probe at a time, log result to discovery log, 30s timeout per probe.
+- **Metric:** HTTP 200 = confirmed, 4xx = discard, update `driver.go` constant when confirmed.
+
+### Phase Completion
+- **When a Phase is complete:** Update ROADMAP.md, archive observer report to `.claude/archive/`, run observer-full as final gate.
+- **When starting a new Phase:** Run `/begin` command to sync context and check for blockers.
+
+### Quality Gates
+- **Before any commit:** Run `go test ./source/ -v` in both microservice dirs.
+- **Before any PR:** Run observer-full, disposition all findings, run `/pr` command.
+- **Before session end:** Run `/done` (quick) or `/end` (full) to verify clean state.
+
+## Demand Catalog
+
+Skills, agents, and references are cataloged in `.claude/library.yaml`. Consult the catalog before creating new utilities — reuse existing patterns.
+
 ## OpenAV Reference
 
 - Org: https://github.com/Dartmouth-OpenAV
 - Architecture wiki: https://github.com/Dartmouth-OpenAV/.github/wiki
 - Pearl API reference: see `epiphan-mcp-server` for endpoint mapping (do NOT copy Python patterns)
+- Pearl API Swagger: https://epiphan-video.github.io/pearl_api_swagger_ui/

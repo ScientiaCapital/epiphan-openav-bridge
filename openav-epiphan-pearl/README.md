@@ -62,10 +62,9 @@ curl http://localhost/admin:mypass@192.168.1.100/healthcheck
 
 ## Testing
 
-Run the curl test script:
+Run the Go unit tests (includes mock Pearl API server):
 ```bash
-# Edit MICROSERVICE_URL and DEVICE_FQDN in the script first
-./pearl_curl_tests.sh
+go test ./source/ -v
 ```
 
 ## Pearl API Reference
