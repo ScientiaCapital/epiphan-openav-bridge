@@ -16,8 +16,13 @@ proof/                    # Phase 1: RTSP compatibility proof (Python)
 openav-epiphan-pearl/     # Phase 2: Pearl Go microservice
 openav-epiphan-ec20/      # Phase 2: EC20 PTZ Go microservice
 demo/                     # Phase 3: docker-compose full-stack demo
+openav-mcp/               # Phase 4: MCP server face (Python) — the AI-first layer for agents
 .claude/                  # Agent infrastructure (observers, commands, programs)
 ```
+
+`openav-mcp` is a thin MCP server that exposes the OpenAV orchestrator + the Go microservices as
+agent-callable tools. It contains **no LLM dependency itself** — the model lives in the external agent
+(e.g. SilkRoute) that consumes this MCP server. So the "No OpenAI" rule below still holds repo-wide.
 
 ## Key Commands
 

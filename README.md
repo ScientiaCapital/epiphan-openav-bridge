@@ -13,9 +13,12 @@ This project adds Epiphan Pearl and EC20 as first-class OpenAV devices, followin
 | Component | Description | Status |
 |-----------|-------------|--------|
 | **RTSP Proof** | Scripts proving EC20/Pearl streams work with ffmpeg (OpenAV's recording pipeline) | In Progress |
-| **Pearl Microservice** | Go service wrapping Pearl REST API v2.0 for OpenAV | Planned |
-| **EC20 Microservice** | Go service wrapping EC20 REST API for OpenAV | Planned |
-| **Smart Room Demo** | Full pipeline: EC20 tracking → Pearl recording → CMS upload via OpenAV | Planned |
+| **Pearl Microservice** | Go service wrapping Pearl REST API v2.0 for OpenAV | ✅ Built — 46 tests (mock-verified) |
+| **EC20 Microservice** | Go service wrapping EC20 REST API for OpenAV | ⚠️ Built — 80 tests, but REST endpoints are **PLACEHOLDER** pending hardware |
+| **Smart Room Demo** | Full pipeline (EC20 tracking → Pearl recording) via the OpenAV orchestrator | ✅ Demo stack present (`demo/docker-compose.yml`) |
+| **openav-mcp** | Python MCP server fronting the above for LLM agents (the AI-first layer) | ✅ Built — 11 tests, SilkRoute round-trip verified |
+
+> **Handoff:** to run the whole agentic stack end-to-end with no hardware, see **[`HANDOFF.md`](HANDOFF.md)**.
 
 ## Motivation
 
@@ -49,42 +52,61 @@ python rtsp_test.py --ec20-ip 192.168.1.50 --pearl-ip 192.168.1.100
 
 ### Pearl Microservice (Phase 2)
 
+These are **stateless** OpenAV microservices — they take no device config. Credentials are supplied
+**per request** in the URL path (`user:pass@host`, the OpenAV `socketKey` convention), so there is no
+`.env` to set up. The service listens on **:80** inside the container.
+
 ```bash
 cd openav-epiphan-pearl/
-cp .env.example .env  # Edit with your Pearl IP and credentials
+go build -o pearl-service ./source/   # source lives in ./source/
+./pearl-service                       # binds :80
 
-go build -o pearl-service .
-./pearl-service
-
-# Or with Docker
+# Or with Docker (container :80 → host 8081)
 docker build -t openav-epiphan-pearl .
-docker run -e PEARL_HOST=192.168.1.100 -e PEARL_USERNAME=admin -e PEARL_PASSWORD=secret -p 8080:8080 openav-epiphan-pearl
+docker run -p 8081:80 openav-epiphan-pearl
+
+# Call it (creds embedded in the path):
+curl http://localhost:8081/admin:password@192.168.1.100/status
+curl -X PUT http://localhost:8081/admin:password@192.168.1.100/recording \
+     -H 'content-type: application/json' -d '"start"'
 ```
 
 ### EC20 Microservice (Phase 2)
 
+> ⚠️ **Pre-hardware:** the EC20 REST endpoint paths in `source/driver.go` are PLACEHOLDER and must be
+> verified against a real EC20 before production use (see `.claude/programs/ec20-api-discovery.md`).
+
 ```bash
 cd openav-epiphan-ec20/
-cp .env.example .env  # Edit with your EC20 IP and credentials
+go build -o ec20-service ./source/
+./ec20-service                        # binds :80
 
-go build -o ec20-service .
-./ec20-service
-
-# Or with Docker
+# Or with Docker (container :80 → host 8082)
 docker build -t openav-epiphan-ec20 .
-docker run -e EC20_HOST=192.168.1.50 -e EC20_USERNAME=admin -e EC20_PASSWORD=secret -p 8081:8080 openav-epiphan-ec20
+docker run -p 8082:80 openav-epiphan-ec20
+
+curl http://localhost:8082/admin:password@192.168.1.50/status
 ```
 
 ## Architecture
 
 ```
-OpenAV Orchestrator (Raspberry Pi + Docker)
-├── Sony Display Microservice (existing)
-├── Projector Microservice (existing)
-├── DSP Microservice (existing)
-├── Pearl Microservice (this project)     ──REST──▶ Pearl Mini
+LLM agent (SilkRoute / Hermes / OpenClaw / Claude Desktop)   ← AI-first layer
+        │  plain English, over MCP
+        ▼
+openav-mcp  (this repo — MCP face; scene + device tools)     ← this project adds
+        │  REST
+        ▼
+OpenAV Orchestrator (Raspberry Pi + Docker)                  ← Dartmouth OpenAV (the brains)
+├── Sony Display / Projector / DSP Microservices (existing)
+├── Pearl Microservice (this project)     ──REST──▶ Pearl encoder   ← Epiphan (the reliable iron)
 └── EC20 Microservice (this project)      ──REST──▶ EC20 PTZ Camera
 ```
+
+**Positioning:** OpenAV is the brains/control; Epiphan is the reliable hardware; the agent is the
+backbone *above* OpenAV. These stay separate — "Epiphan hardware running OpenAV," never "Epiphan
+OpenAV." `openav-mcp` doesn't replace OpenAV; it just exposes the existing REST surfaces as
+agent-callable MCP tools. See [`openav-mcp/`](openav-mcp/) and [`HANDOFF.md`](HANDOFF.md).
 
 Each microservice follows OpenAV conventions:
 - Single Go binary in Docker container
