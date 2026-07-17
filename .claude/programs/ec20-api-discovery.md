@@ -136,6 +136,45 @@ For each endpoint:
    - `OPTIONS /` — may reveal routes
    - Check for Swagger/OpenAPI at `/api/docs`, `/swagger.json`, `/openapi.json`
 
+## Doc Research — 2026-07-17 (no hardware)
+
+Mined Epiphan's own documentation to de-risk the endpoints without a device. The
+**REST URL paths remain undiscoverable from public docs** (neither the AI User Guide nor
+the Q-SYS Plugin README lists a single `/api/...` path; the User Guide PDF is image-only),
+so the 12 paths below stay `NEEDS-PROBE`. But several **behavioral facts are now
+DOC-CONFIRMED** and were applied directly to `driver.go` — no hardware required.
+
+**Sources**
+- Epiphan Knowledge `ec20/epiphan-ec20-ai-userguide` (Epiphan-EC20-AI-UserGuide.docx, updated 2026-07-16) — authoritative
+- Epiphan Knowledge `ec20/epiphan-ec20-qsys-plugin-readme` (2026-05-12)
+- EC20 tech-specs / user-guide portal (epiphan.com)
+
+**DOC-CONFIRMED (applied to driver.go)**
+| Fact | Value | Source |
+|------|-------|--------|
+| Preset number range | **0–255** — preset **0 is valid** ("If preset 0 is saved, PTZ will be moved to preset 0"); "Presets max: 255" | AI User Guide specs + init note |
+| AI tracking modes | **`Presenter`** (default, aka Human Tracking) and **`Zone`** | AI User Guide, Tracking Configuration |
+| Pan range | **±162.5°** | AI User Guide, PTZ specs |
+| Tilt range | **−30° → +90°** | AI User Guide, PTZ specs |
+| Pan speed | 1.8°–80°/s | AI User Guide, PTZ specs |
+| Tilt speed | 1.5°–49°/s | AI User Guide, PTZ specs |
+| HTTP port | **80** (default; configurable 1025–65535) | AI User Guide, Network > Port |
+| Auth | HTTP Basic, default `admin` / `admin` | AI User Guide, Web Interface |
+| Preview stream | MJPEG (preview stream is second stream) | AI User Guide + Q-SYS README |
+
+> ⚠️ The Q-SYS plugin README shows presets "0–11" — that is only the *plugin's* default
+> preset **count** (a configurable property), NOT the camera's range. The camera range is
+> 0–255 per the AI User Guide specs. Trust the User Guide.
+
+**Alternative documented control planes (NEEDS-PROBE / future work)**
+- **VISCA over IP** — port **52381** (fixed, cannot be changed). Standardized binary protocol; a robust fallback if the proprietary REST paths never surface.
+- **ONVIF** — port **81** by default (toggle + auth in Network > ONVIF). Standardized PTZ profile.
+- **NDI|HX3** control, RS-232/RS-485 (VISCA/Pelco-D/Pelco-P).
+
+**Best hardware-day shortcut (per "First Move" below):** the EC20 has a full web UI on
+port 80 — inspect its JavaScript for the real `fetch`/XHR calls. That will reveal the REST
+path structure faster than brute-forcing the candidate lists.
+
 ## Discovery Log
 
 | Endpoint | Placeholder Path | Probed | Result | Confirmed Path | Date |

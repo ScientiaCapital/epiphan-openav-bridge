@@ -23,9 +23,9 @@ _No blockers. Codebase is architecturally sound._
 
 ## Smells (log to backlog)
 
-[SMELL] — README.md:~118 — License type inconsistency (MIT in text, GPL-3.0 in LICENSE files) — Documentation accuracy issue. One-line fix.
+[RESOLVED 2026-07-17] — License inconsistency — root `README.md:142-143` now states the dual-license correctly (root=MIT, microservices=GPL-3.0); both microservice READMEs state GPL-3.0. No inconsistency remains.
 
-[SMELL] — Pearl/EC20 READMEs — Reference non-existent curl test scripts — Dead references in documentation.
+[RESOLVED 2026-07-17] — curl test scripts — `pearl_curl_tests.sh` and `ec20_curl_tests.sh` now exist. (Also added: `ec20_probe.sh`, a non-destructive REST endpoint discovery harness.)
 
 [SMELL] — ROADMAP.md — Phase 1 completion status unclear despite proof script existing — Tracking inconsistency.
 

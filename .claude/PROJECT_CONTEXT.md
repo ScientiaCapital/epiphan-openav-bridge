@@ -1,31 +1,36 @@
 # epiphan-openav-bridge
 
-**Branch**: main | **Updated**: 2026-07-17
+**Branch**: main | **Updated**: 2026-07-17 (EC20 doc-driven unblock sprint)
 
 ## Status
 Go microservices bridging Dartmouth **OpenAV** ↔ Epiphan **Pearl + EC20**, plus a new **`openav-mcp`**
 Python MCP server — the **AI-first layer** that lets an LLM agent drive AV rooms in plain English.
-Pearl microservice ✅ (46 tests, builds clean). EC20 ✅ built (80 tests) but **REST endpoints are
-PLACEHOLDER pending hardware**. `openav-mcp` ✅ built (11 tests, fresh-venv install + round-trip
-verified). Positioning: OpenAV = brains, Epiphan = reliable hardware, agent = backbone above — stay
-separate ("Epiphan hardware running OpenAV", never "Epiphan OpenAV").
+Pearl microservice ✅ (46 tests, builds clean). EC20 ✅ built (84 test runs) — **behavior now matches
+Epiphan docs**; only the REST URL *paths* remain PLACEHOLDER pending a hardware probe. `openav-mcp` ✅
+built (round-trip verified). Positioning: OpenAV = brains, Epiphan = reliable hardware, agent =
+backbone above — stay separate ("Epiphan hardware running OpenAV", never "Epiphan OpenAV").
+
+## Done (This Session — EC20 doc-driven unblock)
+- **Mined Epiphan's own docs** (EC20 AI User Guide + Q-SYS plugin README via Epiphan Knowledge) to
+  de-risk EC20 without hardware. Findings logged in `.claude/programs/ec20-api-discovery.md`.
+- **Fixed a real preset bug** in `driver.go`: `validatePresetID` rejected preset 0 (range was 1–255);
+  docs confirm range is **0–255** (preset 0 is valid). Now corrected + tested.
+- Added **DOC-CONFIRMED validation**: tracking modes restricted to `presenter`/`zone`; PTZ range
+  checks (pan ±162.5°, tilt −30°..+90°). New tests; both Go suites green (Pearl 63, EC20 84 runs).
+- Built **`ec20_probe.sh`** — non-destructive (GET-only) hardware-confirmation harness implementing
+  the discovery program. Verified end-to-end in dry mode. Makes hardware day a ~30-min job.
+- Refreshed observers (`QUALITY.md` 0 blockers; 2 stale warnings confirmed already resolved).
 
 ## Today's Focus (next session)
-1. [ ] **Verify EC20 endpoints on real hardware** — the paths in `openav-epiphan-ec20/source/driver.go`
-       are placeholders; run `.claude/programs/ec20-api-discovery.md` against a real EC20.
+1. [ ] **Confirm EC20 paths on hardware** — run `bash openav-epiphan-ec20/ec20_probe.sh` against a real
+       EC20 (or inspect its web-UI JS), paste CONFIRMED paths into `driver.go`, update the mock + tests.
 2. [ ] **Live bring-up** — `cd demo && docker compose up` (Pearl + EC20 + OpenAV orchestrator), point
        `openav-mcp` at it (drop `OPENAV_MOCK`), run the agent path in `HANDOFF.md` §3.
 3. [ ] **Publish/CI `openav-mcp`** — add CI + package it for the OpenAV community (open-core).
 
-## Done (This Session)
-- Built **`openav-mcp/`** — MCP face over the OpenAV orchestrator (scene layer) + Pearl/EC20
-  microservices (device layer), creds injected from config (LLM never sees passwords), `--read-only`
-  gate, mock mode. 11 tests + `scripts/roundtrip_demo.py` (verified).
-- Added **`HANDOFF.md`** (engineer/Vadim plug-and-play guide) + fixed README/CLAUDE errors
-  (`.env.example` didn't exist; build path `./source/`; service binds `:80`; stale "Planned" statuses).
-
 ## Blockers
-- EC20 REST endpoints unverified (no hardware yet). Live demo needs a Pearl/EC20 + OpenAV orchestrator.
+- EC20 REST URL *paths* still need a hardware probe (behavior is doc-confirmed; harness is ready).
+  Live demo needs a Pearl/EC20 + OpenAV orchestrator on the network.
 
 ## Start here
 **`HANDOFF.md`** — verified no-hardware smoke test (`openav-mcp/scripts/roundtrip_demo.py`) + go-live.

@@ -954,6 +954,61 @@ func TestControlPTZ_Unauthorized(t *testing.T) {
 	}
 }
 
+func TestControlPTZ_PanOutOfRange(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	// Pan limit is DOC-CONFIRMED ±162.5°; 200 is beyond the mechanical range.
+	for _, pan := range []string{"200", "-200"} {
+		_, err := controlPTZ(socketKey, pan, "0", "1")
+		if err == nil {
+			t.Fatalf("expected error for out-of-range pan %s", pan)
+		}
+		if !strings.Contains(err.Error(), "pan out of range") {
+			t.Errorf("expected 'pan out of range' for %s, got: %v", pan, err)
+		}
+	}
+}
+
+func TestControlPTZ_TiltOutOfRange(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	// Tilt limit is DOC-CONFIRMED -30°..+90°; -45 and 120 are beyond range.
+	for _, tilt := range []string{"-45", "120"} {
+		_, err := controlPTZ(socketKey, "0", tilt, "1")
+		if err == nil {
+			t.Fatalf("expected error for out-of-range tilt %s", tilt)
+		}
+		if !strings.Contains(err.Error(), "tilt out of range") {
+			t.Errorf("expected 'tilt out of range' for %s, got: %v", tilt, err)
+		}
+	}
+}
+
+func TestControlPTZ_BoundaryValues(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	// Exact documented boundaries must be accepted: pan ±162.5, tilt -30 and +90.
+	cases := []struct{ pan, tilt string }{
+		{"162.5", "90"},
+		{"-162.5", "-30"},
+	}
+	for _, c := range cases {
+		result, err := controlPTZ(socketKey, c.pan, c.tilt, "1")
+		if err != nil {
+			t.Fatalf("unexpected error at boundary pan=%s tilt=%s: %v", c.pan, c.tilt, err)
+		}
+		if result != `"ok"` {
+			t.Errorf("expected \"ok\" at boundary pan=%s tilt=%s, got %s", c.pan, c.tilt, result)
+		}
+	}
+}
+
 func TestControlPTZHome_Success(t *testing.T) {
 	server := mockEC20API(t)
 	defer server.Close()
@@ -1093,6 +1148,50 @@ func TestControlTracking_QuotedArgs(t *testing.T) {
 	}
 	if result != `"ok"` {
 		t.Errorf("expected \"ok\", got %s", result)
+	}
+}
+
+func TestControlTracking_Zone(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	// "zone" is a DOC-CONFIRMED tracking mode alongside "presenter".
+	result, err := controlTracking(socketKey, "enable", "zone")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != `"ok"` {
+		t.Errorf("expected \"ok\", got %s", result)
+	}
+}
+
+func TestControlTracking_DefaultsToPresenter(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	// An empty mode on enable defaults to presenter (documented default).
+	result, err := controlTracking(socketKey, "enable", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != `"ok"` {
+		t.Errorf("expected \"ok\", got %s", result)
+	}
+}
+
+func TestControlTracking_InvalidMode(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	_, err := controlTracking(socketKey, "enable", "wander")
+	if err == nil {
+		t.Fatal("expected error for invalid tracking mode")
+	}
+	if !strings.Contains(err.Error(), "invalid tracking mode") {
+		t.Errorf("expected 'invalid tracking mode' in error, got: %v", err)
 	}
 }
 
@@ -1317,7 +1416,8 @@ func TestValidatePresetID_Valid(t *testing.T) {
 		name     string
 		presetID string
 	}{
-		{"minimum", "1"},
+		{"zero (valid - preset 0 exists per EC20 docs)", "0"},
+		{"minimum nonzero", "1"},
 		{"middle", "128"},
 		{"maximum", "255"},
 	}
@@ -1338,7 +1438,6 @@ func TestValidatePresetID_Invalid(t *testing.T) {
 		presetID string
 	}{
 		{"empty string", ""},
-		{"zero", "0"},
 		{"negative", "-1"},
 		{"too large", "256"},
 		{"non-numeric", "abc"},

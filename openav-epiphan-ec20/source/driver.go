@@ -16,8 +16,14 @@ import (
 )
 
 // ========== EC20 API Endpoint Constants ==========
-// All paths are PLACEHOLDER values. The EC20 REST API is not publicly documented.
-// Update this block when endpoints are confirmed on real hardware.
+// The REST URL paths below are PLACEHOLDER values. The EC20's REST API paths are NOT
+// published in Epiphan's public docs (the AI User Guide, Q-SYS plugin README, and tech
+// specs all omit them — see .claude/programs/ec20-api-discovery.md, 2026-07-17 research).
+// Confirm them on real hardware with ec20_probe.sh, then update this block.
+//
+// NOTE: while the *paths* are unverified, the EC20's control *behavior* IS documented and
+// is enforced elsewhere in this file (DOC-CONFIRMED 2026-07-17): preset range 0-255,
+// tracking modes presenter/zone, pan ±162.5°, tilt -30°..+90°, HTTP port 80, Basic Auth.
 
 const (
 	ec20EndpointStatus      = "/api/status"           // PLACEHOLDER - GET device status
@@ -55,14 +61,17 @@ func parseSocketKey(socketKey string) (host string, username string, password st
 	return
 }
 
-// validatePresetID ensures presetID is a valid integer in range 1-255.
+// validatePresetID ensures presetID is a valid integer in the EC20 preset range 0-255.
+// Preset 0 IS valid: the EC20 User Guide notes "If preset 0 is saved, PTZ will be moved
+// to preset 0" during init, and the tech specs list a maximum of 255 presets.
+// (DOC-CONFIRMED 2026-07-17 — previously this rejected preset 0, a bug.)
 func validatePresetID(presetID string) error {
 	id, err := strconv.Atoi(presetID)
 	if err != nil {
 		return fmt.Errorf("presetID must be numeric: %s", presetID)
 	}
-	if id < 1 || id > 255 {
-		return fmt.Errorf("presetID out of range (1-255): %d", id)
+	if id < 0 || id > 255 {
+		return fmt.Errorf("presetID out of range (0-255): %d", id)
 	}
 	return nil
 }
@@ -461,6 +470,20 @@ func controlPTZ(socketKey string, panStr string, tiltStr string, zoomStr string)
 		return "", errors.New(errMsg)
 	}
 
+	// Enforce DOC-CONFIRMED physical limits (EC20 User Guide, PTZ specs 2026-07-17):
+	// pan ±162.5°, tilt -30°..+90°. Zoom has no documented absolute scale, so it is
+	// passed through unvalidated (NEEDS-PROBE).
+	if pan < -162.5 || pan > 162.5 {
+		errMsg := fmt.Sprintf(function+" - pan out of range (-162.5..162.5): %v", pan)
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
+	if tilt < -30 || tilt > 90 {
+		errMsg := fmt.Sprintf(function+" - tilt out of range (-30..90): %v", tilt)
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
+
 	// Pan
 	_, err = ec20APIPostJSON(socketKey, ec20EndpointPan, map[string]interface{}{
 		"degrees": pan,
@@ -563,6 +586,18 @@ func controlTracking(socketKey string, action string, mode string) (string, erro
 
 	switch action {
 	case "enable":
+		// Tracking modes are DOC-CONFIRMED (EC20 User Guide, Tracking Configuration):
+		// "Presenter" (default, aka Human Tracking) and "Zone". Default to presenter
+		// when unspecified, and reject anything else.
+		mode = strings.ToLower(mode)
+		if mode == "" {
+			mode = "presenter"
+		}
+		if mode != "presenter" && mode != "zone" {
+			errMsg := function + " - invalid tracking mode: " + mode + " (expected 'presenter' or 'zone')"
+			framework.AddToErrors(socketKey, errMsg)
+			return "", errors.New(errMsg)
+		}
 		_, err := ec20APIPostJSON(socketKey, ec20EndpointTrackingOn, map[string]interface{}{
 			"mode": mode,
 		})
