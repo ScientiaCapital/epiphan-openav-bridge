@@ -1,5 +1,7 @@
 # epiphan-openav-bridge
 
+[![CI](https://github.com/ScientiaCapital/epiphan-openav-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ScientiaCapital/epiphan-openav-bridge/actions/workflows/ci.yml)
+
 Open-source Go microservices that let [Dartmouth OpenAV](https://github.com/Dartmouth-OpenAV) natively control [Epiphan Pearl](https://www.epiphan.com/products/pearl-mini/) encoders and [EC20 PTZ cameras](https://www.epiphan.com/products/ec20/).
 
 ## What This Is

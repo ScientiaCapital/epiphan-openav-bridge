@@ -304,13 +304,19 @@ func healthCheck(socketKey string) (string, error) {
 
 // ========== SET functions ==========
 
-func controlPTZ(socketKey string, panStr string, tiltStr string, zoomStr string) (string, error) {
+// ptzBody is the PUT .../ptz/:pan/:tilt request body: {"zoom": <number>, "speed": <optional int>}.
+// speed defaults to 50 (the prior hardcoded value) when omitted.
+type ptzBody struct {
+	Zoom  *float64 `json:"zoom"`
+	Speed *int     `json:"speed"`
+}
+
+func controlPTZ(socketKey string, panStr string, tiltStr string, bodyStr string) (string, error) {
 	function := "controlPTZ"
-	framework.Log(function + " - called for: " + socketKey + " pan: " + panStr + " tilt: " + tiltStr + " zoom: " + zoomStr)
+	framework.Log(function + " - called for: " + socketKey + " pan: " + panStr + " tilt: " + tiltStr + " body: " + bodyStr)
 
 	panStr = strings.Trim(panStr, `"`)
 	tiltStr = strings.Trim(tiltStr, `"`)
-	zoomStr = strings.Trim(zoomStr, `"`)
 
 	pan, err := strconv.ParseFloat(panStr, 64)
 	if err != nil {
@@ -326,9 +332,23 @@ func controlPTZ(socketKey string, panStr string, tiltStr string, zoomStr string)
 		return "", errors.New(errMsg)
 	}
 
-	zoom, err := strconv.ParseFloat(zoomStr, 64)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - invalid zoom value: %s", zoomStr)
+	var body ptzBody
+	if jsonErr := json.Unmarshal([]byte(bodyStr), &body); jsonErr != nil || body.Zoom == nil {
+		errMsg := fmt.Sprintf(function+` - invalid zoom value (expected JSON body {"zoom":<num>,"speed":<optional int>}): %s`, bodyStr)
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
+	zoom := *body.Zoom
+
+	// speed is a caller-settable PTZ move speed; the EC20 API accepts it per-axis but has no
+	// documented valid range, so only guard against non-positive values. Defaults to the
+	// previously-hardcoded 50 when the caller doesn't specify one.
+	speed := 50
+	if body.Speed != nil {
+		speed = *body.Speed
+	}
+	if speed <= 0 {
+		errMsg := fmt.Sprintf(function+" - speed must be positive: %d", speed)
 		framework.AddToErrors(socketKey, errMsg)
 		return "", errors.New(errMsg)
 	}
@@ -350,7 +370,7 @@ func controlPTZ(socketKey string, panStr string, tiltStr string, zoomStr string)
 	// Pan
 	_, err = ec20APIPostJSON(socketKey, ec20EndpointPan, map[string]interface{}{
 		"degrees": pan,
-		"speed":   50,
+		"speed":   speed,
 	})
 	if err != nil {
 		return "", err
@@ -359,7 +379,7 @@ func controlPTZ(socketKey string, panStr string, tiltStr string, zoomStr string)
 	// Tilt
 	_, err = ec20APIPostJSON(socketKey, ec20EndpointTilt, map[string]interface{}{
 		"degrees": tilt,
-		"speed":   50,
+		"speed":   speed,
 	})
 	if err != nil {
 		return "", err

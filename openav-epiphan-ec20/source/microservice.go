@@ -60,7 +60,7 @@ func doDeviceSpecificSet(socketKey string, setting string, arg1 string, arg2 str
 
 	switch setting {
 	case "ptz":
-		// PUT /:addr/ptz/:pan/:tilt  body=zoom
+		// PUT /:addr/ptz/:pan/:tilt  body={"zoom":<num>,"speed":<optional int, default 50>}
 		return controlPTZ(socketKey, arg1, arg2, arg3)
 	case "ptzhome":
 		// PUT /:addr/ptzhome

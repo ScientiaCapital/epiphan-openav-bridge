@@ -46,6 +46,9 @@ The driver URL format follows the OpenAV convention:
 dartmouth-openav/microservice-name:current/username:password@device-ip/endpoint
 ```
 
+> ⚠️ **`authorization.json` is `*` (wildcard, allow-all) in this demo stack — dev/local use only.**
+> Never deploy this as-is; a real deployment needs a scoped authorization policy.
+
 ### Available Endpoints
 
 **Pearl Microservice** (`microservice-epiphan-pearl`):
@@ -64,7 +67,7 @@ dartmouth-openav/microservice-name:current/username:password@device-ip/endpoint
 - GET `/ptzposition` - Current PTZ position
 - GET `/presets` - List saved presets
 - GET `/preview` - Preview image (JPEG)
-- PUT `/ptz/:pan/:tilt` - Control PTZ (body: zoom value)
+- PUT `/ptz/:pan/:tilt` - Control PTZ (body: `{"zoom":<float>,"speed":<optional int>}`)
 - PUT `/ptzhome` - Return to home position
 - PUT `/preset/:presetId` - Recall preset
 - PUT `/presetsave/:presetId` - Save preset (body: name)

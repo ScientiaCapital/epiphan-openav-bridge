@@ -872,7 +872,7 @@ func TestControlPTZ_Success(t *testing.T) {
 	defer server.Close()
 
 	socketKey := socketKeyFromServer(server)
-	result, err := controlPTZ(socketKey, "45.0", "-10.0", "2.0")
+	result, err := controlPTZ(socketKey, "45.0", "-10.0", `{"zoom":2.0}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -887,7 +887,7 @@ func TestControlPTZ_QuotedArgs(t *testing.T) {
 
 	socketKey := socketKeyFromServer(server)
 	// Framework passes quoted values; controlPTZ strips quotes
-	result, err := controlPTZ(socketKey, `"45.0"`, `"-10.0"`, `"2.0"`)
+	result, err := controlPTZ(socketKey, `"45.0"`, `"-10.0"`, `{"zoom":2.0}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -896,12 +896,57 @@ func TestControlPTZ_QuotedArgs(t *testing.T) {
 	}
 }
 
+func TestControlPTZ_CustomSpeedIsForwarded(t *testing.T) {
+	var panSpeed, tiltSpeed float64
+	mux := http.NewServeMux()
+	mux.HandleFunc(ec20EndpointPan, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		panSpeed = body["speed"].(float64)
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+	})
+	mux.HandleFunc(ec20EndpointTilt, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		tiltSpeed = body["speed"].(float64)
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+	})
+	mux.HandleFunc(ec20EndpointZoom, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	_, err := controlPTZ(socketKey, "45.0", "-10.0", `{"zoom":2.0,"speed":90}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if panSpeed != 90 || tiltSpeed != 90 {
+		t.Errorf("expected speed 90 forwarded to pan+tilt, got pan=%v tilt=%v", panSpeed, tiltSpeed)
+	}
+}
+
+func TestControlPTZ_NonPositiveSpeedErrors(t *testing.T) {
+	server := mockEC20API(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	_, err := controlPTZ(socketKey, "0", "0", `{"zoom":1,"speed":0}`)
+	if err == nil {
+		t.Fatal("expected error for non-positive speed")
+	}
+	if !strings.Contains(err.Error(), "speed must be positive") {
+		t.Errorf("expected 'speed must be positive' in error, got: %v", err)
+	}
+}
+
 func TestControlPTZ_InvalidPan(t *testing.T) {
 	server := mockEC20API(t)
 	defer server.Close()
 
 	socketKey := socketKeyFromServer(server)
-	_, err := controlPTZ(socketKey, "notanumber", "0", "1")
+	_, err := controlPTZ(socketKey, "notanumber", "0", `{"zoom":1}`)
 	if err == nil {
 		t.Fatal("expected error for invalid pan value")
 	}
@@ -915,7 +960,7 @@ func TestControlPTZ_InvalidTilt(t *testing.T) {
 	defer server.Close()
 
 	socketKey := socketKeyFromServer(server)
-	_, err := controlPTZ(socketKey, "0", "notanumber", "1")
+	_, err := controlPTZ(socketKey, "0", "notanumber", `{"zoom":1}`)
 	if err == nil {
 		t.Fatal("expected error for invalid tilt value")
 	}
@@ -938,6 +983,34 @@ func TestControlPTZ_InvalidZoom(t *testing.T) {
 	}
 }
 
+// TestControlPTZ_TiltFailsAfterPanSucceeds covers the partial-failure/mid-sequence path:
+// pan's POST succeeds but tilt's POST fails — controlPTZ must surface the error rather than
+// silently reporting success while the camera is left with only pan actually applied.
+func TestControlPTZ_TiltFailsAfterPanSucceeds(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(ec20EndpointPan, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+	})
+	mux.HandleFunc(ec20EndpointTilt, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	})
+	mux.HandleFunc(ec20EndpointZoom, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("zoom should never be called once tilt has failed")
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	_, err := controlPTZ(socketKey, "45.0", "-10.0", `{"zoom":2.0}`)
+	if err == nil {
+		t.Fatal("expected error when the tilt call fails after pan succeeds")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("expected HTTP 500 in error, got: %v", err)
+	}
+}
+
 func TestControlPTZ_Unauthorized(t *testing.T) {
 	server := mockEC20API(t)
 	defer server.Close()
@@ -945,7 +1018,7 @@ func TestControlPTZ_Unauthorized(t *testing.T) {
 	addr := strings.TrimPrefix(server.URL, "http://")
 	socketKey := "admin:wrongpass@" + addr
 
-	_, err := controlPTZ(socketKey, "0", "0", "1")
+	_, err := controlPTZ(socketKey, "0", "0", `{"zoom":1}`)
 	if err == nil {
 		t.Fatal("expected error for bad credentials")
 	}
@@ -961,7 +1034,7 @@ func TestControlPTZ_PanOutOfRange(t *testing.T) {
 	socketKey := socketKeyFromServer(server)
 	// Pan limit is DOC-CONFIRMED ±162.5°; 200 is beyond the mechanical range.
 	for _, pan := range []string{"200", "-200"} {
-		_, err := controlPTZ(socketKey, pan, "0", "1")
+		_, err := controlPTZ(socketKey, pan, "0", `{"zoom":1}`)
 		if err == nil {
 			t.Fatalf("expected error for out-of-range pan %s", pan)
 		}
@@ -978,7 +1051,7 @@ func TestControlPTZ_TiltOutOfRange(t *testing.T) {
 	socketKey := socketKeyFromServer(server)
 	// Tilt limit is DOC-CONFIRMED -30°..+90°; -45 and 120 are beyond range.
 	for _, tilt := range []string{"-45", "120"} {
-		_, err := controlPTZ(socketKey, "0", tilt, "1")
+		_, err := controlPTZ(socketKey, "0", tilt, `{"zoom":1}`)
 		if err == nil {
 			t.Fatalf("expected error for out-of-range tilt %s", tilt)
 		}
@@ -999,7 +1072,7 @@ func TestControlPTZ_BoundaryValues(t *testing.T) {
 		{"-162.5", "-30"},
 	}
 	for _, c := range cases {
-		result, err := controlPTZ(socketKey, c.pan, c.tilt, "1")
+		result, err := controlPTZ(socketKey, c.pan, c.tilt, `{"zoom":1}`)
 		if err != nil {
 			t.Fatalf("unexpected error at boundary pan=%s tilt=%s: %v", c.pan, c.tilt, err)
 		}
@@ -1330,8 +1403,8 @@ func TestDoDeviceSpecificSet_PTZ(t *testing.T) {
 	defer server.Close()
 
 	socketKey := socketKeyFromServer(server)
-	// PUT /:addr/ptz/:pan/:tilt  body=zoom
-	result, err := doDeviceSpecificSet(socketKey, "ptz", "45.0", "-10.0", "2.0")
+	// PUT /:addr/ptz/:pan/:tilt  body={"zoom":<num>,"speed":<optional int>}
+	result, err := doDeviceSpecificSet(socketKey, "ptz", "45.0", "-10.0", `{"zoom":2.0}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

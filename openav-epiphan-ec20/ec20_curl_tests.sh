@@ -35,7 +35,7 @@ sleep 1
 # PUT requests
 echo ""
 echo "=== SET ptz (pan=45, tilt=-10, zoom=2.0) ==="
-curl -X PUT "http://$MICROSERVICE_URL/$DEVICE_FQDN/ptz/45/-10" -H "Content-Type: application/json" -d '"2.0"'
+curl -X PUT "http://$MICROSERVICE_URL/$DEVICE_FQDN/ptz/45/-10" -H "Content-Type: application/json" -d '{"zoom":2.0}'
 sleep 2
 
 echo ""

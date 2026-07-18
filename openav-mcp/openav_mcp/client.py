@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openav_mcp.config import OpenAVConfig
+from openav_mcp.config import DeviceKind, OpenAVConfig
 
 # Named multi-step scenes for run_scene(). Each step = (control_set, control, value).
 SCENE_RECIPES: dict[str, list[tuple[str, str, Any]]] = {
@@ -42,6 +42,14 @@ class OpenAVClient:
     def _resolve_address(self, alias: str) -> str:
         """alias → ``user:pass@host`` (INTERNAL; embeds password, never returned)."""
         return self.config.device(alias).address
+
+    def _require_kind(self, device: str, expected: DeviceKind) -> None:
+        """Validate the alias exists AND is configured as the expected device kind —
+        nothing else stops a caller from e.g. sending ec20_ptz to a device configured
+        kind="pearl"."""
+        cfg = self.config.device(device)
+        if cfg.kind != expected:
+            raise ValueError(f"device '{device}' is kind={cfg.kind!r}, expected {expected!r}")
 
     @staticmethod
     def _state_tree(control_set: str, control: str, value: Any) -> dict[str, Any]:
@@ -114,8 +122,8 @@ class OpenAVClient:
     async def pearl_control_recording(self, device: str, action: str) -> dict[str, Any]:
         if action not in {"start", "stop"}:
             raise ValueError("action must be 'start' or 'stop'")
+        self._require_kind(device, "pearl")
         if self.config.mock:
-            self.config.device(device)  # validate alias
             self._mock_devices.setdefault(device, {})["recording"] = action
         else:
             await self._device_put(self.config.pearl_service_url, device, "recording", action)
@@ -124,14 +132,18 @@ class OpenAVClient:
     async def pearl_singletouch(self, device: str, action: str) -> dict[str, Any]:
         if action not in {"start", "stop"}:
             raise ValueError("action must be 'start' or 'stop'")
+        self._require_kind(device, "pearl")
         if not self.config.mock:
             await self._device_put(self.config.pearl_service_url, device, "singletouch", action)
         else:
-            self.config.device(device)
+            # Singletouch starts/stops recording+streaming together — reflect that in the
+            # tracked mock state so a subsequent pearl_status() shows it, same as
+            # pearl_control_recording.
+            self._mock_devices.setdefault(device, {})["recording"] = action
         return {"device": device, "action": action, "ok": True}
 
     async def pearl_status(self, device: str) -> dict[str, Any]:
-        self.config.device(device)  # validate alias
+        self._require_kind(device, "pearl")
         if self.config.mock:
             rec = self._mock_devices.get(device, {}).get("recording", "stopped")
             return {"device": device, "ok": True, "status": {"recording": rec, "state": "online"}}
@@ -140,44 +152,58 @@ class OpenAVClient:
         return {"device": device, "ok": True, "status": raw}
 
     # -- device layer: EC20 ----------------------------------------------
-    async def ec20_ptz(self, device: str, pan: float, tilt: float, zoom: float) -> dict[str, Any]:
+    async def ec20_ptz(
+        self, device: str, pan: float, tilt: float, zoom: float, speed: int = 50
+    ) -> dict[str, Any]:
         # Keep in sync with openav-epiphan-ec20/source/driver.go controlPTZ (DOC-CONFIRMED
         # physical limits) — validated in both mock and live mode so an agent can't learn
-        # a range in mock that then fails against real hardware.
+        # a range in mock that then fails against real hardware. speed has no documented
+        # range, only guard against non-positive values (matches the Go driver).
         if not -162.5 <= pan <= 162.5:
             raise ValueError("pan must be -162.5..162.5")
         if not -30 <= tilt <= 90:
             raise ValueError("tilt must be -30..90")
+        if speed <= 0:
+            raise ValueError("speed must be positive")
+        self._require_kind(device, "ec20")
         if not self.config.mock:
             await self._device_put(
-                self.config.ec20_service_url, device, f"ptz/{pan}/{tilt}", zoom
+                self.config.ec20_service_url,
+                device,
+                f"ptz/{pan}/{tilt}",
+                {"zoom": zoom, "speed": speed},
             )
         else:
-            self.config.device(device)
-            self._mock_devices.setdefault(device, {})["ptz"] = [pan, tilt, zoom]
-        return {"device": device, "pan": pan, "tilt": tilt, "zoom": zoom, "ok": True}
+            self._mock_devices.setdefault(device, {})["ptz"] = [pan, tilt, zoom, speed]
+        return {
+            "device": device,
+            "pan": pan,
+            "tilt": tilt,
+            "zoom": zoom,
+            "speed": speed,
+            "ok": True,
+        }
 
     async def ec20_tracking(self, device: str, action: str, mode: str = "presenter") -> dict[str, Any]:
         if action not in {"enable", "disable"}:
             raise ValueError("action must be 'enable' or 'disable'")
+        self._require_kind(device, "ec20")
         if not self.config.mock:
             await self._device_put(self.config.ec20_service_url, device, f"tracking/{action}", mode)
         else:
-            self.config.device(device)
             self._mock_devices.setdefault(device, {})["tracking"] = action
         return {"device": device, "action": action, "mode": mode, "ok": True}
 
     async def ec20_preset_recall(self, device: str, preset_id: int) -> dict[str, Any]:
         if not 0 <= preset_id <= 255:
             raise ValueError("preset_id must be 0-255")
+        self._require_kind(device, "ec20")
         if not self.config.mock:
             await self._device_put(self.config.ec20_service_url, device, f"preset/{preset_id}", "")
-        else:
-            self.config.device(device)
         return {"device": device, "preset_id": preset_id, "ok": True}
 
     async def ec20_status(self, device: str) -> dict[str, Any]:
-        self.config.device(device)
+        self._require_kind(device, "ec20")
         if self.config.mock:
             d = self._mock_devices.get(device, {})
             status = {"tracking": d.get("tracking", "disabled"), "state": "online"}

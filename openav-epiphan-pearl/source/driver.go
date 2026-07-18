@@ -34,6 +34,10 @@ func parseSocketKey(socketKey string) (host string, username string, password st
 	return
 }
 
+// validChannelIDPattern matches validateChannelID's allowed charset. Compiled once at package
+// init rather than on every call.
+var validChannelIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 // validateChannelID ensures channelID is safe for URL path construction.
 // Only allows alphanumeric, hyphens, and underscores (max 64 chars).
 func validateChannelID(channelID string) error {
@@ -43,8 +47,7 @@ func validateChannelID(channelID string) error {
 	if len(channelID) > 64 {
 		return fmt.Errorf("channelID too long: %d chars (max 64)", len(channelID))
 	}
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, channelID)
-	if !matched {
+	if !validChannelIDPattern.MatchString(channelID) {
 		return fmt.Errorf("channelID contains invalid characters: %s", channelID)
 	}
 	return nil

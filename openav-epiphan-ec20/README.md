@@ -29,7 +29,7 @@ An OpenAV microservice for controlling Epiphan EC20 PTZ cameras via REST API. Bu
 
 | Endpoint | Body | Description |
 |----------|------|-------------|
-| `/:address/ptz/:pan/:tilt` | zoom level (float) | Move to absolute PTZ position |
+| `/:address/ptz/:pan/:tilt` | `{"zoom":<float>,"speed":<optional int, default 50>}` | Move to absolute PTZ position |
 | `/:address/ptzhome` | (none) | Return camera to home position |
 | `/:address/preset/:presetId` | (none) | Recall a saved preset |
 | `/:address/presetsave/:presetId` | preset name | Save current position as preset |
@@ -61,9 +61,13 @@ curl http://localhost/admin:mypass@192.168.1.100/ptzposition
 # Get presets
 curl http://localhost/admin:mypass@192.168.1.100/presets
 
-# Move camera (pan=45, tilt=-10, zoom=2.0)
+# Move camera (pan=45, tilt=-10, zoom=2.0, default speed)
 curl -X PUT http://localhost/admin:mypass@192.168.1.100/ptz/45/-10 \
-  -H "Content-Type: application/json" -d '"2.0"'
+  -H "Content-Type: application/json" -d '{"zoom":2.0}'
+
+# Same, with a custom PTZ move speed
+curl -X PUT http://localhost/admin:mypass@192.168.1.100/ptz/45/-10 \
+  -H "Content-Type: application/json" -d '{"zoom":2.0,"speed":90}'
 
 # Return to home position
 curl -X PUT http://localhost/admin:mypass@192.168.1.100/ptzhome

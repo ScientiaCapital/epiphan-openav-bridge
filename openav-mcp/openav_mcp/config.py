@@ -59,7 +59,19 @@ def load_config_from_env() -> OpenAVConfig:
     devices: dict[str, DeviceConfig] = {}
     raw = os.environ.get("OPENAV_DEVICES", "").strip()
     if raw:
-        for d in json.loads(raw):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"OPENAV_DEVICES is not valid JSON: {exc}") from exc
+        for i, d in enumerate(parsed):
+            for required in ("alias", "host"):
+                if required not in d:
+                    # Report the entry's keys only, never its values — one of them may be
+                    # a password.
+                    raise ValueError(
+                        f"OPENAV_DEVICES[{i}] is missing required field '{required}' "
+                        f"(present fields: {sorted(d.keys())})"
+                    )
             devices[d["alias"]] = DeviceConfig(
                 alias=d["alias"],
                 host=d["host"],

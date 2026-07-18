@@ -38,7 +38,7 @@ presenter."* Here is every MCP call it makes, in order:
 | 3 | Is the camera online, is it tracking? | `ec20_status` | `{"device":"room-320b-cam"}` | `{"device":"room-320b-cam","ok":true,"status":{"tracking":"disabled","state":"online"}}` |
 | 4 | Is the encoder online, is it recording? | `pearl_status` | `{"device":"room-320b-pearl"}` | `{"device":"room-320b-pearl","ok":true,"status":{"recording":"stopped","state":"online"}}` |
 | 5 | Recall preset 0 — the home/podium shot — before the talk starts. | `ec20_preset_recall` | `{"device":"room-320b-cam","preset_id":0}` | `{"device":"room-320b-cam","preset_id":0,"ok":true}` |
-| 6 | Nudge pan/tilt and pull a little zoom to frame the lectern. | `ec20_ptz` | `{"device":"room-320b-cam","pan":12.0,"tilt":-3.0,"zoom":2.0}` | `{"device":"room-320b-cam","pan":12.0,"tilt":-3.0,"zoom":2.0,"ok":true}` |
+| 6 | Nudge pan/tilt and pull a little zoom to frame the lectern. | `ec20_ptz` | `{"device":"room-320b-cam","pan":12.0,"tilt":-3.0,"zoom":2.0}` | `{"device":"room-320b-cam","pan":12.0,"tilt":-3.0,"zoom":2.0,"speed":50,"ok":true}` |
 | 7 | Enable AI presenter tracking so the camera follows the speaker. | `ec20_tracking` | `{"device":"room-320b-cam","action":"enable","mode":"presenter"}` | `{"device":"room-320b-cam","action":"enable","mode":"presenter","ok":true}` |
 | 8 | Start recording the session on the Pearl. | `pearl_control_recording` | `{"device":"room-320b-pearl","action":"start"}` | `{"device":"room-320b-pearl","action":"start","ok":true}` |
 | 9 | Verify tracking is now active. | `ec20_status` | `{"device":"room-320b-cam"}` | `{"device":"room-320b-cam","ok":true,"status":{"tracking":"enable","state":"online"}}` |
