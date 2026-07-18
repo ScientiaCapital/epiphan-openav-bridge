@@ -6,6 +6,21 @@ Thanks for your interest in `epiphan-openav-bridge`. This project follows
 
 ## Building and testing
 
+**First-time setup for each Go microservice** — the vendored `Dartmouth-OpenAV/microservice-framework`
+submodule deliberately excludes `go.mod`/`go.sum` from its own git history (see its `.gitignore`), so a
+fresh clone has neither. Run this once per service before `go test`/`go build` will work outside Docker:
+
+```bash
+cd openav-epiphan-pearl && bash ./init-framework-mod.sh
+cd openav-epiphan-ec20 && bash ./init-framework-mod.sh
+```
+
+This regenerates the framework's `go.mod` and reconciles the top-level `go.mod`/`go.sum` against it —
+which may show up as a local diff to `go.mod`/`go.sum` (the framework has no committed lockfile to pin
+against, so this can pick up newer transitive dependency versions than what's currently committed). That's
+expected; `git checkout -- go.mod go.sum` afterward if you don't want to keep the bump. CI runs this same
+script on every fresh checkout — see `.github/workflows/ci.yml`.
+
 ```bash
 # Go microservices (each is a standalone module)
 cd openav-epiphan-pearl && go test ./source/ -v

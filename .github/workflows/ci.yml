@@ -15,6 +15,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      - run: bash ./init-framework-mod.sh
+        working-directory: openav-epiphan-pearl
       - run: go test ./source/ -v
         working-directory: openav-epiphan-pearl
 
@@ -27,6 +29,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      - run: bash ./init-framework-mod.sh
+        working-directory: openav-epiphan-ec20
       - run: go test ./source/ -v
         working-directory: openav-epiphan-ec20
 

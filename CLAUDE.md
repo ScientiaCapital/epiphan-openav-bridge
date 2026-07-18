@@ -28,6 +28,11 @@ agent-callable tools. It contains **no LLM dependency itself** — the model liv
 
 ```bash
 # Phase 2: Go microservices (must export PATH="/opt/homebrew/bin:$PATH" first)
+# First time only (fresh clone): the vendored framework submodule's go.mod/go.sum are
+# gitignored upstream, so generate them before go test/build will work outside Docker.
+cd openav-epiphan-pearl && bash ./init-framework-mod.sh
+cd openav-epiphan-ec20 && bash ./init-framework-mod.sh
+
 cd openav-epiphan-pearl && go test ./source/ -v
 cd openav-epiphan-ec20 && go test ./source/ -v
 
