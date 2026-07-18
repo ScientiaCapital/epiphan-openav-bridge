@@ -22,12 +22,21 @@ SCENE_RECIPES: dict[str, list[tuple[str, str, Any]]] = {
 }
 
 
+class DeviceRequestError(RuntimeError):
+    """A device/orchestrator HTTP call failed. Message is always credential-safe.
+
+    Never built from the raw httpx exception's ``str()`` — that embeds the request
+    URL, which embeds ``user:pass@host`` for device calls (see ``_resolve_address``).
+    """
+
+
 class OpenAVClient:
     def __init__(self, config: OpenAVConfig) -> None:
         self.config = config
         # Mock state: last state tree PUT, and per-device action log.
         self._mock_state: dict[str, Any] = {}
         self._mock_devices: dict[str, dict[str, Any]] = {}
+        self._transport: Any = None  # test-only seam for httpx.MockTransport
 
     # -- internal ---------------------------------------------------------
     def _resolve_address(self, alias: str) -> str:
@@ -38,13 +47,29 @@ class OpenAVClient:
     def _state_tree(control_set: str, control: str, value: Any) -> dict[str, Any]:
         return {"control_sets": {control_set: {"controls": {control: {"value": value}}}}}
 
-    async def _put(self, url: str, json_body: Any) -> Any:
+    async def _request(self, method: str, url: str, *, json_body: Any = None) -> str:
+        """Issue an HTTP call, translating any failure into a credential-safe error.
+
+        ``httpx``'s exception messages embed the full request URL, which for device
+        calls embeds ``user:pass@host`` — never let that string reach a caller
+        (server.py forwards uncaught exception text straight to the model).
+        """
         import httpx
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.put(url, json=json_body)
-            resp.raise_for_status()
-            return resp.text
+        try:
+            async with httpx.AsyncClient(timeout=10, transport=self._transport) as client:
+                resp = await client.request(method, url, json=json_body)
+                resp.raise_for_status()
+                return resp.text
+        except httpx.HTTPStatusError as exc:
+            raise DeviceRequestError(
+                f"device request failed: HTTP {exc.response.status_code}"
+            ) from None
+        except httpx.HTTPError as exc:
+            raise DeviceRequestError(f"device request failed: {type(exc).__name__}") from None
+
+    async def _put(self, url: str, json_body: Any) -> Any:
+        return await self._request("PUT", url, json_body=json_body)
 
     async def _device_put(self, service_url: str, alias: str, path: str, body: Any) -> Any:
         addr = self._resolve_address(alias)
@@ -109,17 +134,20 @@ class OpenAVClient:
         self.config.device(device)  # validate alias
         if self.config.mock:
             rec = self._mock_devices.get(device, {}).get("recording", "stopped")
-            return {"device": device, "recording": rec, "state": "online"}
-        import httpx
-
+            return {"device": device, "ok": True, "status": {"recording": rec, "state": "online"}}
         addr = self._resolve_address(device)
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{self.config.pearl_service_url}/{addr}/status")
-            resp.raise_for_status()
-            return {"device": device, "raw": resp.text}
+        raw = await self._request("GET", f"{self.config.pearl_service_url}/{addr}/status")
+        return {"device": device, "ok": True, "status": raw}
 
     # -- device layer: EC20 ----------------------------------------------
     async def ec20_ptz(self, device: str, pan: float, tilt: float, zoom: float) -> dict[str, Any]:
+        # Keep in sync with openav-epiphan-ec20/source/driver.go controlPTZ (DOC-CONFIRMED
+        # physical limits) — validated in both mock and live mode so an agent can't learn
+        # a range in mock that then fails against real hardware.
+        if not -162.5 <= pan <= 162.5:
+            raise ValueError("pan must be -162.5..162.5")
+        if not -30 <= tilt <= 90:
+            raise ValueError("tilt must be -30..90")
         if not self.config.mock:
             await self._device_put(
                 self.config.ec20_service_url, device, f"ptz/{pan}/{tilt}", zoom
@@ -152,11 +180,8 @@ class OpenAVClient:
         self.config.device(device)
         if self.config.mock:
             d = self._mock_devices.get(device, {})
-            return {"device": device, "tracking": d.get("tracking", "disabled"), "state": "online"}
-        import httpx
-
+            status = {"tracking": d.get("tracking", "disabled"), "state": "online"}
+            return {"device": device, "ok": True, "status": status}
         addr = self._resolve_address(device)
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{self.config.ec20_service_url}/{addr}/status")
-            resp.raise_for_status()
-            return {"device": device, "raw": resp.text}
+        raw = await self._request("GET", f"{self.config.ec20_service_url}/{addr}/status")
+        return {"device": device, "ok": True, "status": raw}

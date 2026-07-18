@@ -76,29 +76,37 @@ func validatePresetID(presetID string) error {
 	return nil
 }
 
-// ec20APIGet performs an authenticated GET request to the EC20 REST API.
-// Unlike Pearl, EC20 endpoints include the full path in constants (no /api/v2.0 prefix).
-// Tolerates responses without a "status" field since the EC20 response format is unknown.
-func ec20APIGet(socketKey string, endpoint string) (map[string]interface{}, error) {
-	function := "ec20APIGet"
-
+// ec20APIRequest performs an authenticated HTTP request to the EC20 REST API and returns the
+// raw response body. Shared by ec20APIGet/ec20APIPost/ec20APIPostJSON/ec20APIGetRaw.
+// logResponse=false skips logging the body (used for raw binary responses, e.g. JPEG preview,
+// where logging it as a string would be useless/huge).
+func ec20APIRequest(socketKey, function, method, endpoint string, jsonBody []byte, logResponse bool) ([]byte, error) {
 	host, username, password := parseSocketKey(socketKey)
 	url := "http://" + host + endpoint
 
-	framework.Log(function + " - GET " + url)
+	var reqBody io.Reader
+	if jsonBody != nil {
+		reqBody = bytes.NewBuffer(jsonBody)
+		framework.Log(function + " - " + method + " " + url + " body: " + string(jsonBody))
+	} else {
+		framework.Log(function + " - " + method + " " + url)
+	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(method, url, reqBody)
 	if err != nil {
 		errMsg := fmt.Sprintf(function+" - error creating request: %v", err)
 		framework.AddToErrors(socketKey, errMsg)
 		return nil, errors.New(errMsg)
 	}
 	req.SetBasicAuth(username, password)
+	if jsonBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error doing GET: %v", err)
+		errMsg := fmt.Sprintf(function+" - error doing %s: %v", method, err)
 		framework.AddToErrors(socketKey, errMsg)
 		return nil, errors.New(errMsg)
 	}
@@ -111,215 +119,8 @@ func ec20APIGet(socketKey string, endpoint string) (map[string]interface{}, erro
 		return nil, errors.New(errMsg)
 	}
 
-	framework.Log(function + " - response: " + string(bodyBytes))
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		errMsg := function + " - 401 Unauthorized: check EC20 credentials"
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	if resp.StatusCode != http.StatusOK {
-		errMsg := fmt.Sprintf(function+" - HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	var result map[string]interface{}
-	err = json.Unmarshal(bodyBytes, &result)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error parsing JSON: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	// Tolerate responses without "status" field — EC20 response format is unknown
-	if status, ok := result["status"].(string); ok && status != "ok" {
-		msg := ""
-		if m, ok := result["message"].(string); ok {
-			msg = m
-		}
-		errMsg := fmt.Sprintf(function+" - API error: %s - %s", status, msg)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	return result, nil
-}
-
-// ec20APIPost performs an authenticated body-less POST request to the EC20 REST API.
-// Used for endpoints like home and tracking/disable that take no body.
-func ec20APIPost(socketKey string, endpoint string) error {
-	function := "ec20APIPost"
-
-	host, username, password := parseSocketKey(socketKey)
-	url := "http://" + host + endpoint
-
-	framework.Log(function + " - POST " + url)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("POST", url, nil)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error creating request: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return errors.New(errMsg)
-	}
-	req.SetBasicAuth(username, password)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error doing POST: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return errors.New(errMsg)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error reading response: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return errors.New(errMsg)
-	}
-
-	framework.Log(function + " - response: " + string(bodyBytes))
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		errMsg := function + " - 401 Unauthorized: check EC20 credentials"
-		framework.AddToErrors(socketKey, errMsg)
-		return errors.New(errMsg)
-	}
-	if resp.StatusCode != http.StatusOK {
-		errMsg := fmt.Sprintf(function+" - HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-		framework.AddToErrors(socketKey, errMsg)
-		return errors.New(errMsg)
-	}
-
-	var result map[string]interface{}
-	err = json.Unmarshal(bodyBytes, &result)
-	if err != nil {
-		// Some POST endpoints may not return JSON - that's OK
-		return nil
-	}
-
-	if status, ok := result["status"].(string); ok && status != "ok" {
-		msg := ""
-		if m, ok := result["message"].(string); ok {
-			msg = m
-		}
-		errMsg := fmt.Sprintf(function+" - API error: %s - %s", status, msg)
-		framework.AddToErrors(socketKey, errMsg)
-		return errors.New(errMsg)
-	}
-
-	return nil
-}
-
-// ec20APIPostJSON performs an authenticated POST request with a JSON body.
-// Used for PTZ commands, preset operations, and tracking enable that require parameters.
-func ec20APIPostJSON(socketKey string, endpoint string, body map[string]interface{}) (map[string]interface{}, error) {
-	function := "ec20APIPostJSON"
-
-	host, username, password := parseSocketKey(socketKey)
-	url := "http://" + host + endpoint
-
-	jsonBytes, err := json.Marshal(body)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error marshaling JSON body: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	framework.Log(function + " - POST " + url + " body: " + string(jsonBytes))
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error creating request: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	req.SetBasicAuth(username, password)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error doing POST: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	defer resp.Body.Close()
-
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error reading response: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	framework.Log(function + " - response: " + string(respBytes))
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		errMsg := function + " - 401 Unauthorized: check EC20 credentials"
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	if resp.StatusCode != http.StatusOK {
-		errMsg := fmt.Sprintf(function+" - HTTP %d: %s", resp.StatusCode, string(respBytes))
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	var result map[string]interface{}
-	err = json.Unmarshal(respBytes, &result)
-	if err != nil {
-		// Some POST endpoints may not return JSON - return empty map
-		return make(map[string]interface{}), nil
-	}
-
-	if status, ok := result["status"].(string); ok && status != "ok" {
-		msg := ""
-		if m, ok := result["message"].(string); ok {
-			msg = m
-		}
-		errMsg := fmt.Sprintf(function+" - API error: %s - %s", status, msg)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	return result, nil
-}
-
-// ec20APIGetRaw performs an authenticated GET request and returns the raw response bytes.
-// Used by getPreview for JPEG binary data — no JSON parsing attempted.
-func ec20APIGetRaw(socketKey string, endpoint string) ([]byte, error) {
-	function := "ec20APIGetRaw"
-
-	host, username, password := parseSocketKey(socketKey)
-	url := "http://" + host + endpoint
-
-	framework.Log(function + " - GET " + url)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error creating request: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	req.SetBasicAuth(username, password)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error doing GET: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error reading response: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
+	if logResponse {
+		framework.Log(function + " - response: " + string(bodyBytes))
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
@@ -336,13 +137,108 @@ func ec20APIGetRaw(socketKey string, endpoint string) ([]byte, error) {
 	return bodyBytes, nil
 }
 
+// checkAPIStatus returns an error if result carries a tolerant "status" field != "ok".
+// Tolerates responses without a "status" field since the EC20 response format is unknown.
+func checkAPIStatus(socketKey, function string, result map[string]interface{}) error {
+	if status, ok := result["status"].(string); ok && status != "ok" {
+		msg := ""
+		if m, ok := result["message"].(string); ok {
+			msg = m
+		}
+		errMsg := fmt.Sprintf(function+" - API error: %s - %s", status, msg)
+		framework.AddToErrors(socketKey, errMsg)
+		return errors.New(errMsg)
+	}
+	return nil
+}
+
+// ec20APIGet performs an authenticated GET request to the EC20 REST API.
+// Unlike Pearl, EC20 endpoints include the full path in constants (no /api/v2.0 prefix).
+func ec20APIGet(socketKey string, endpoint string) (map[string]interface{}, error) {
+	function := "ec20APIGet"
+
+	bodyBytes, err := ec20APIRequest(socketKey, function, "GET", endpoint, nil, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		errMsg := fmt.Sprintf(function+" - error parsing JSON: %v", err)
+		framework.AddToErrors(socketKey, errMsg)
+		return nil, errors.New(errMsg)
+	}
+
+	if err := checkAPIStatus(socketKey, function, result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// ec20APIPost performs an authenticated body-less POST request to the EC20 REST API.
+// Used for endpoints like home and tracking/disable that take no body.
+func ec20APIPost(socketKey string, endpoint string) error {
+	function := "ec20APIPost"
+
+	bodyBytes, err := ec20APIRequest(socketKey, function, "POST", endpoint, nil, true)
+	if err != nil {
+		return err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		// Some POST endpoints may not return JSON - that's OK
+		return nil
+	}
+
+	return checkAPIStatus(socketKey, function, result)
+}
+
+// ec20APIPostJSON performs an authenticated POST request with a JSON body.
+// Used for PTZ commands, preset operations, and tracking enable that require parameters.
+func ec20APIPostJSON(socketKey string, endpoint string, body map[string]interface{}) (map[string]interface{}, error) {
+	function := "ec20APIPostJSON"
+
+	jsonBytes, err := json.Marshal(body)
+	if err != nil {
+		errMsg := fmt.Sprintf(function+" - error marshaling JSON body: %v", err)
+		framework.AddToErrors(socketKey, errMsg)
+		return nil, errors.New(errMsg)
+	}
+
+	respBytes, err := ec20APIRequest(socketKey, function, "POST", endpoint, jsonBytes, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		// Some POST endpoints may not return JSON - return empty map
+		return make(map[string]interface{}), nil
+	}
+
+	if err := checkAPIStatus(socketKey, function, result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// ec20APIGetRaw performs an authenticated GET request and returns the raw response bytes.
+// Used by getPreview for JPEG binary data — no JSON parsing attempted.
+func ec20APIGetRaw(socketKey string, endpoint string) ([]byte, error) {
+	return ec20APIRequest(socketKey, "ec20APIGetRaw", "GET", endpoint, nil, false)
+}
+
 // ========== GET functions ==========
 
-func getCameraStatus(socketKey string) (string, error) {
-	function := "getCameraStatus"
-	framework.Log(function + " - called for: " + socketKey)
-
-	data, err := ec20APIGet(socketKey, ec20EndpointStatus)
+// fetchResultOrRaw calls ec20APIGet(endpoint) and marshals the "result" field, falling back to
+// the full response if EC20 returns data at the top level (shape unknown pending hardware) —
+// the shared shape of getCameraStatus/getPTZPosition/getPresets. fieldLabel feeds the
+// per-function error text (e.g. "error marshaling status: %v").
+func fetchResultOrRaw(socketKey, function, fieldLabel, endpoint string) (string, error) {
+	data, err := ec20APIGet(socketKey, endpoint)
 	if err != nil {
 		return "", err
 	}
@@ -355,60 +251,27 @@ func getCameraStatus(socketKey string) (string, error) {
 
 	jsonBytes, err := json.Marshal(result)
 	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error marshaling status: %v", err)
+		errMsg := fmt.Sprintf(function+" - error marshaling "+fieldLabel+": %v", err)
 		framework.AddToErrors(socketKey, errMsg)
 		return "", errors.New(errMsg)
 	}
 
 	return string(jsonBytes), nil
+}
+
+func getCameraStatus(socketKey string) (string, error) {
+	framework.Log("getCameraStatus - called for: " + socketKey)
+	return fetchResultOrRaw(socketKey, "getCameraStatus", "status", ec20EndpointStatus)
 }
 
 func getPTZPosition(socketKey string) (string, error) {
-	function := "getPTZPosition"
-	framework.Log(function + " - called for: " + socketKey)
-
-	data, err := ec20APIGet(socketKey, ec20EndpointPosition)
-	if err != nil {
-		return "", err
-	}
-
-	result, ok := data["result"]
-	if !ok {
-		result = data
-	}
-
-	jsonBytes, err := json.Marshal(result)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error marshaling position: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return "", errors.New(errMsg)
-	}
-
-	return string(jsonBytes), nil
+	framework.Log("getPTZPosition - called for: " + socketKey)
+	return fetchResultOrRaw(socketKey, "getPTZPosition", "position", ec20EndpointPosition)
 }
 
 func getPresets(socketKey string) (string, error) {
-	function := "getPresets"
-	framework.Log(function + " - called for: " + socketKey)
-
-	data, err := ec20APIGet(socketKey, ec20EndpointPresets)
-	if err != nil {
-		return "", err
-	}
-
-	result, ok := data["result"]
-	if !ok {
-		result = data
-	}
-
-	jsonBytes, err := json.Marshal(result)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error marshaling presets: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return "", errors.New(errMsg)
-	}
-
-	return string(jsonBytes), nil
+	framework.Log("getPresets - called for: " + socketKey)
+	return fetchResultOrRaw(socketKey, "getPresets", "presets", ec20EndpointPresets)
 }
 
 func getPreview(socketKey string) (string, error) {

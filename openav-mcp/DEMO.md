@@ -6,7 +6,9 @@ This walkthrough shows the whole point of `epiphan-openav-bridge`: **plain-Engli
 intent becoming real AV-room control**, driven over the actual [MCP](https://modelcontextprotocol.io)
 protocol — with **no hardware**. Everything below runs in-memory
 (`OPENAV_MOCK=true`); the same tool calls hit real Pearl/EC20 microservices when
-mock mode is off.
+mock mode is off. The response envelope (`device`/`ok`/`status`) is identical
+either way — the `status` payload's exact fields depend on the real device's
+response and won't match the mock's synthetic values.
 
 ## The control plane
 
@@ -33,14 +35,14 @@ presenter."* Here is every MCP call it makes, in order:
 |---|---|---|---|---|
 | 1 | Agent asks the MCP server what it can control. | `list_tools` | — | `10 tools (3 read-only, 7 mutating)` |
 | 2 | What scenes and controls does Room 320B expose? | `list_room_controls` | `{"system":"smart-room-demo"}` | `{"system":"smart-room-demo","scenes":["record_session","stop_session"],"control_sets":{"recording":["record","streaming"],"camera":["tracking","ptz_home"]}}` |
-| 3 | Is the camera online, is it tracking? | `ec20_status` | `{"device":"room-320b-cam"}` | `{"device":"room-320b-cam","tracking":"disabled","state":"online"}` |
-| 4 | Is the encoder online, is it recording? | `pearl_status` | `{"device":"room-320b-pearl"}` | `{"device":"room-320b-pearl","recording":"stopped","state":"online"}` |
+| 3 | Is the camera online, is it tracking? | `ec20_status` | `{"device":"room-320b-cam"}` | `{"device":"room-320b-cam","ok":true,"status":{"tracking":"disabled","state":"online"}}` |
+| 4 | Is the encoder online, is it recording? | `pearl_status` | `{"device":"room-320b-pearl"}` | `{"device":"room-320b-pearl","ok":true,"status":{"recording":"stopped","state":"online"}}` |
 | 5 | Recall preset 0 — the home/podium shot — before the talk starts. | `ec20_preset_recall` | `{"device":"room-320b-cam","preset_id":0}` | `{"device":"room-320b-cam","preset_id":0,"ok":true}` |
 | 6 | Nudge pan/tilt and pull a little zoom to frame the lectern. | `ec20_ptz` | `{"device":"room-320b-cam","pan":12.0,"tilt":-3.0,"zoom":2.0}` | `{"device":"room-320b-cam","pan":12.0,"tilt":-3.0,"zoom":2.0,"ok":true}` |
 | 7 | Enable AI presenter tracking so the camera follows the speaker. | `ec20_tracking` | `{"device":"room-320b-cam","action":"enable","mode":"presenter"}` | `{"device":"room-320b-cam","action":"enable","mode":"presenter","ok":true}` |
 | 8 | Start recording the session on the Pearl. | `pearl_control_recording` | `{"device":"room-320b-pearl","action":"start"}` | `{"device":"room-320b-pearl","action":"start","ok":true}` |
-| 9 | Verify tracking is now active. | `ec20_status` | `{"device":"room-320b-cam"}` | `{"device":"room-320b-cam","tracking":"enable","state":"online"}` |
-| 10 | Verify recording is now rolling. | `pearl_status` | `{"device":"room-320b-pearl"}` | `{"device":"room-320b-pearl","recording":"start","state":"online"}` |
+| 9 | Verify tracking is now active. | `ec20_status` | `{"device":"room-320b-cam"}` | `{"device":"room-320b-cam","ok":true,"status":{"tracking":"enable","state":"online"}}` |
+| 10 | Verify recording is now rolling. | `pearl_status` | `{"device":"room-320b-pearl"}` | `{"device":"room-320b-pearl","ok":true,"status":{"recording":"start","state":"online"}}` |
 | 11 | Show the shorthand: a single scene call the orchestrator expands into steps. | `run_scene` | `{"system":"smart-room-demo","scene":"record_session"}` | `{"ok":true,"system":"smart-room-demo","scene":"record_session","steps":[{"control_set":"camera","control":"tracking","value":true},{"control_set":"recording","control":"record","value":true}]}` |
 | 12 | The talk ends — stop the recording. | `pearl_control_recording` | `{"device":"room-320b-pearl","action":"stop"}` | `{"device":"room-320b-pearl","action":"stop","ok":true}` |
 | 13 | Disable tracking and free the camera. | `ec20_tracking` | `{"device":"room-320b-cam","action":"disable"}` | `{"device":"room-320b-cam","action":"disable","mode":"presenter","ok":true}` |

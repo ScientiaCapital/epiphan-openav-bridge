@@ -55,7 +55,7 @@ _No critical findings._
 | Tech debt markers (TODO/FIXME/HACK/XXX) in source | 0 |
 | Hardcoded secrets in source | 0 (fake fixtures in test files only) |
 | Silent failures (Python bare except) | 0 |
-| Test counts | Pearl: 46 · EC20: 68 · openav-mcp: 5 (top-level test funcs) |
+| Test counts | Pearl: 46 · EC20: 74 · openav-mcp: 18 (top-level test funcs) |
 
 ---
 

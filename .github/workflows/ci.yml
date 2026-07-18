@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go-pearl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: go test ./source/ -v
+        working-directory: openav-epiphan-pearl
+
+  go-ec20:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: go test ./source/ -v
+        working-directory: openav-epiphan-ec20
+
+  openav-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+        working-directory: openav-mcp
+      - run: ruff check .
+        working-directory: openav-mcp
+      - run: pytest -q
+        working-directory: openav-mcp
+
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [openav-epiphan-pearl, openav-epiphan-ec20]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: docker build -t ${{ matrix.service }} ./${{ matrix.service }}

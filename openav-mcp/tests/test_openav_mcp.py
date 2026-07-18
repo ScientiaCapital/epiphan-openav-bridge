@@ -7,14 +7,15 @@ passwords), and the MCP server tool catalog + annotations.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
-from openav_mcp.client import OpenAVClient
+from openav_mcp.client import DeviceRequestError, OpenAVClient
 from openav_mcp.config import DeviceConfig, OpenAVConfig
 from openav_mcp.server import build_server, list_tool_specs
 
 
-def _config() -> OpenAVConfig:
+def _config(*, mock: bool = True) -> OpenAVConfig:
     return OpenAVConfig(
         orchestrator_url="http://orchestrator:8080",
         pearl_service_url="http://pearl-svc:80",
@@ -29,7 +30,7 @@ def _config() -> OpenAVConfig:
                 password="s3cret", kind="ec20",
             ),
         },
-        mock=True,
+        mock=mock,
     )
 
 
@@ -90,6 +91,30 @@ class TestDeviceLayer:
         with pytest.raises(KeyError):
             await c.pearl_control_recording("does-not-exist", "start")
 
+    @pytest.mark.asyncio
+    async def test_ec20_ptz_pan_out_of_range_errors(self) -> None:
+        c = _client()
+        with pytest.raises(ValueError):
+            await c.ec20_ptz("room-320b-cam", pan=999, tilt=0, zoom=0)
+
+    @pytest.mark.asyncio
+    async def test_ec20_ptz_tilt_out_of_range_errors(self) -> None:
+        c = _client()
+        with pytest.raises(ValueError):
+            await c.ec20_ptz("room-320b-cam", pan=0, tilt=999, zoom=0)
+
+    @pytest.mark.asyncio
+    async def test_pearl_status_envelope_shape(self) -> None:
+        c = _client()
+        out = await c.pearl_status("room-320b-pearl")
+        assert set(out) == {"device", "ok", "status"}
+
+    @pytest.mark.asyncio
+    async def test_ec20_status_envelope_shape(self) -> None:
+        c = _client()
+        out = await c.ec20_status("room-320b-cam")
+        assert set(out) == {"device", "ok", "status"}
+
 
 class TestCredentialSafety:
     @pytest.mark.asyncio
@@ -106,6 +131,19 @@ class TestCredentialSafety:
         c = _client()
         addr = c._resolve_address("room-320b-pearl")  # internal only
         assert addr == "admin:s3cret@pearl-host"
+
+    @pytest.mark.asyncio
+    async def test_device_http_error_never_leaks_credentials(self) -> None:
+        # Live mode (mock=False) so the request actually builds a credential-bearing
+        # URL; a MockTransport stands in for the real device and returns a plain 500,
+        # simulating e.g. a wrong password on real hardware.
+        c = OpenAVClient(_config(mock=False))
+        c._transport = httpx.MockTransport(lambda request: httpx.Response(500))
+        with pytest.raises(DeviceRequestError) as exc_info:
+            await c.pearl_status("room-320b-pearl")
+        message = str(exc_info.value)
+        assert "s3cret" not in message
+        assert "pearl-host" not in message
 
 
 class TestMCPServer:

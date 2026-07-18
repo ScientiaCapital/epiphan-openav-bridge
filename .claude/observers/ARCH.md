@@ -27,7 +27,7 @@ _No blockers. Codebase is architecturally sound._
 
 [RESOLVED 2026-07-17] — curl test scripts — `pearl_curl_tests.sh` and `ec20_curl_tests.sh` now exist. (Also added: `ec20_probe.sh`, a non-destructive REST endpoint discovery harness.)
 
-[SMELL] — ROADMAP.md — Phase 1 completion status unclear despite proof script existing — Tracking inconsistency.
+[RESOLVED 2026-07-18] — ROADMAP.md — Phase 1 completion status unclear despite proof script existing — Checked ROADMAP.md directly: Phase 1's checkbox is genuinely unchecked, which is consistent with root README.md's own "In Progress" status for RTSP Proof (not a tracking bug — both docs agree Phase 1 isn't done yet).
 
 ---
 

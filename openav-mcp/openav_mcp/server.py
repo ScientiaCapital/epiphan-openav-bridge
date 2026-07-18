@@ -17,7 +17,7 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from openav_mcp.client import OpenAVClient
+from openav_mcp.client import DeviceRequestError, OpenAVClient
 from openav_mcp.config import load_config_from_env
 
 _DEVICE = {"device": {"type": "string", "description": "Device alias from config"}}
@@ -124,7 +124,7 @@ def build_server(
         try:
             result = await _dispatch(active, name, arguments or {})
             return [types.TextContent(type="text", text=json.dumps(result))]
-        except (KeyError, ValueError) as exc:
+        except (KeyError, ValueError, DeviceRequestError) as exc:
             return [types.TextContent(type="text", text=json.dumps({"error": str(exc)}))]
 
     return server

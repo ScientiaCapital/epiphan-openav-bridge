@@ -30,10 +30,11 @@ skills:
     description: Sony FPD driver — reference implementation for OpenAV patterns
     source: local:///tmp/openav-sony-fpd/source/
     notes: >
-      WARNING: /tmp/ path may not persist across reboots.
-      Key reference for how OpenAV drivers handle GET/SET,
-      error reporting, and framework integration.
-      If missing, clone from Dartmouth-OpenAV GitHub.
+      WARNING: this is a session-local scratch path, not a durable repo location —
+      /tmp/ is routinely cleared on reboot and there is no durable alternative to
+      point to instead. Key reference for how OpenAV drivers handle GET/SET, error
+      reporting, and framework integration. If missing, find the exact Sony FPD repo
+      name under https://github.com/Dartmouth-OpenAV and re-clone it into /tmp/.
 
 agents:
   - name: observer-full
