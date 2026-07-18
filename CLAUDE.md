@@ -16,7 +16,7 @@ proof/                    # Phase 1: RTSP compatibility proof (Python)
 openav-epiphan-pearl/     # Phase 2: Pearl Go microservice
 openav-epiphan-ec20/      # Phase 2: EC20 PTZ Go microservice
 demo/                     # Phase 3: docker-compose full-stack demo
-openav-mcp/               # Phase 4: MCP server face (Python) — the AI-first layer for agents
+openav-mcp/               # MCP server face (Python) — the AI-first layer for agents (added after Phases 1-3)
 .claude/                  # Agent infrastructure (observers, commands, programs)
 ```
 
@@ -41,16 +41,17 @@ cd demo && docker compose up
 
 ## Environment Variables
 
+**The Go microservices are stateless and read NO device env vars.** Credentials are supplied
+**per-request** in the URL path (`.../current/user:pass@device-ip/endpoint`), so a single service
+instance can front many devices. The services bind `:80` in-container.
+
+The only env vars in play are the `OPENAV_*` set consumed by **`openav-mcp`**:
+
 ```bash
-PEARL_HOST=192.168.x.x
-PEARL_USERNAME=admin
-PEARL_PASSWORD=your_password
-PEARL_PORT=8080
-EC20_HOST=192.168.x.x
-EC20_USERNAME=admin
-EC20_PASSWORD=your_password
-SERVICE_PORT=8080
-LOG_LEVEL=info
+OPENAV_ORCHESTRATOR_URL=http://localhost:8080   # the OpenAV orchestrator
+OPENAV_DEVICES='[{"alias":"room-320b-pearl","host":"<ip>","username":"admin","password":"x","kind":"pearl"}]'
+OPENAV_MOCK=true                                # mock mode — no hardware/orchestrator needed
+# The model references devices by ALIAS; openav-mcp injects creds so the model never sees passwords.
 ```
 
 ## Rules
@@ -60,7 +61,7 @@ LOG_LEVEL=info
 - Each service exposes `/status` and `/health` endpoints
 - No Epiphan Cloud — local network REST API only
 - No proprietary dependencies (GPL-3.0 compatibility)
-- No hardcoded credentials — env vars only
+- No hardcoded credentials — Go services take creds per-request in the URL; `openav-mcp` injects them from `OPENAV_DEVICES`
 
 ## Decision Rules (Executable Spec)
 

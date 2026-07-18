@@ -2,7 +2,7 @@
 
 **What this is:** an AI-first control layer for AV rooms. An LLM agent takes a plain-English
 request ("get room 320-B recording with the camera tracking the presenter") and drives
-[Dartmouth OpenAV](https://github.com/open-avc/openavc) + Epiphan Pearl/EC20 over
+[Dartmouth OpenAV](https://github.com/Dartmouth-OpenAV) + Epiphan Pearl/EC20 over
 [MCP](https://modelcontextprotocol.io) — on-prem, model-agnostic, no proprietary control programming.
 
 **Positioning (important):** OpenAV is the brains/control; Epiphan is the reliable hardware; the agent
@@ -40,7 +40,7 @@ Proves the MCP layer works end-to-end in mock mode. Only needs Python 3.11+.
 cd epiphan-openav-bridge/openav-mcp
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                      # → 11 passed
+pytest -q                      # → 13 passed
 python scripts/roundtrip_demo.py
 ```
 
@@ -85,13 +85,15 @@ Sony/DSP servers at once (see `silkroute` `MCPConfig.servers`). The `--mock-mcp`
 1. Bring up the Go microservices + OpenAV orchestrator: `cd demo && docker compose up`
    (Pearl svc + EC20 svc + `ghcr.io/dartmouth-openav/orchestrator`). Services listen on **:80**;
    creds are supplied per-request in the URL path (`user:pass@host`) — no `.env` needed.
-2. Point `openav-mcp` at them (drop `OPENAV_MOCK`):
+2. Point `openav-mcp` at the orchestrator (drop `OPENAV_MOCK`):
    ```bash
    export OPENAV_ORCHESTRATOR_URL=http://localhost:8080
-   export OPENAV_PEARL_URL=http://localhost:8081
-   export OPENAV_EC20_URL=http://localhost:8082
    export OPENAV_DEVICES='[{"alias":"room-320b-pearl","host":"<pearl-ip>",...}]'
    ```
+   > Note: `demo/docker-compose.yml` publishes a host port **only for the orchestrator** (`8080:80`).
+   > The Pearl/EC20 microservices are reachable by service name on the internal `openav` network and
+   > are driven *through* the orchestrator — you don't hit them directly. To expose them on the host
+   > (e.g. `localhost:8081/8082`) add explicit `ports:` mappings to the compose file first.
 3. Run the agent as in §2 without `OPENAV_MOCK`.
 
 ## Status — done / placeholder / decisions
@@ -99,8 +101,8 @@ Sony/DSP servers at once (see `silkroute` `MCPConfig.servers`). The `--mock-mcp`
 | Area | State |
 |---|---|
 | Pearl Go microservice | ✅ Built, 46 tests (mock). Builds clean (`go build ./source/`). |
-| EC20 Go microservice | ⚠️ Built, 80 tests, but **REST endpoints are PLACEHOLDER** — verify on real EC20 hardware (`.claude/programs/ec20-api-discovery.md`) before production. |
-| `openav-mcp` (MCP face) | ✅ Built, 11 tests, fresh-venv install verified, round-trip verified. |
+| EC20 Go microservice | ⚠️ Built, 74 tests, but **REST endpoints are PLACEHOLDER** — verify on real EC20 hardware (`.claude/programs/ec20-api-discovery.md`) before production. |
+| `openav-mcp` (MCP face) | ✅ Built, 13 tests, fresh-venv install verified, round-trip verified. |
 | SilkRoute orchestration | ✅ N-server bridge + fit-to-hardware routing shipped; round-trip to openav-mcp verified. |
 | Live hardware run | ⛳ Needs a Pearl/EC20 + OpenAV orchestrator on the bench. |
 | Cloud model (better tool-calling than a 14B) | Set `SILKROUTE_OPENROUTER_API_KEY` and `--model deepseek/deepseek-v3.2` (or Claude/GPT/Gemini via OpenRouter — model-agnostic). |

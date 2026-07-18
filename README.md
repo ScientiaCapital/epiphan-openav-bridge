@@ -14,9 +14,9 @@ This project adds Epiphan Pearl and EC20 as first-class OpenAV devices, followin
 |-----------|-------------|--------|
 | **RTSP Proof** | Scripts proving EC20/Pearl streams work with ffmpeg (OpenAV's recording pipeline) | In Progress |
 | **Pearl Microservice** | Go service wrapping Pearl REST API v2.0 for OpenAV | ✅ Built — 46 tests (mock-verified) |
-| **EC20 Microservice** | Go service wrapping EC20 REST API for OpenAV | ⚠️ Built — 80 tests, but REST endpoints are **PLACEHOLDER** pending hardware |
-| **Smart Room Demo** | Full pipeline (EC20 tracking → Pearl recording) via the OpenAV orchestrator | ✅ Demo stack present (`demo/docker-compose.yml`) |
-| **openav-mcp** | Python MCP server fronting the above for LLM agents (the AI-first layer) | ✅ Built — 11 tests, SilkRoute round-trip verified |
+| **EC20 Microservice** | Go service wrapping EC20 REST API for OpenAV | ⚠️ Built — 74 tests, but REST endpoints are **PLACEHOLDER** pending hardware |
+| **Smart Room Demo** | Full pipeline (EC20 tracking → Pearl recording) via the OpenAV orchestrator | 🚧 Demo stack scaffolded (`demo/docker-compose.yml` builds) — no recorded end-to-end run yet |
+| **openav-mcp** | Python MCP server fronting the above for LLM agents (the AI-first layer) | ✅ Built — 13 tests, SilkRoute round-trip verified |
 
 > **Handoff:** to run the whole agentic stack end-to-end with no hardware, see **[`HANDOFF.md`](HANDOFF.md)**.
 
