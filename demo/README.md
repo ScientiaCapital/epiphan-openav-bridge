@@ -2,7 +2,14 @@
 
 Phase 3 demo: EC20 AI tracking + Pearl recording, orchestrated by OpenAV.
 
-**Note**: Driver URLs in `system-configs/smart-room-demo.json` are PLACEHOLDERS. The exact format for local builds (vs GHCR images) needs verification against the orchestrator. The current URLs follow the OpenAV convention but may need adjustment based on how the orchestrator resolves container names vs image references.
+**Verified 2026-07-18**: the driver URL format in `system-configs/smart-room-demo.json` works correctly
+against locally-built (non-GHCR) microservice images — confirmed end-to-end with
+`docker compose up --build` + a real `PUT /api/systems/smart-room-demo/state` call. The orchestrator
+(via `ADDRESS_MICROSERVICES_BY_NAME=true`) resolves `dartmouth-openav/microservice-epiphan-{pearl,ec20}`
+straight to the Compose service names and successfully routes both the recording and PTZ/tracking control
+calls into each Go binary's request handler. The only failure at that point is the *microservice → real
+device* leg (`pearl-host`/`ec20-host` don't resolve to anything, by design — there's no hardware attached to
+this demo). That's expected and correct; the orchestrator-to-microservice wiring itself is confirmed sound.
 
 ## Quick Start
 

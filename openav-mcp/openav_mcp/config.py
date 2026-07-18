@@ -63,7 +63,13 @@ def load_config_from_env() -> OpenAVConfig:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ValueError(f"OPENAV_DEVICES is not valid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise ValueError(
+                f"OPENAV_DEVICES must be a JSON list, got {type(parsed).__name__}"
+            )
         for i, d in enumerate(parsed):
+            if not isinstance(d, dict):
+                raise ValueError(f"OPENAV_DEVICES[{i}] must be an object, got {type(d).__name__}")
             for required in ("alias", "host"):
                 if required not in d:
                     # Report the entry's keys only, never its values — one of them may be

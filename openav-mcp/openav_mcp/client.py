@@ -155,6 +155,7 @@ class OpenAVClient:
     async def ec20_ptz(
         self, device: str, pan: float, tilt: float, zoom: float, speed: int = 50
     ) -> dict[str, Any]:
+        self._require_kind(device, "ec20")
         # Keep in sync with openav-epiphan-ec20/source/driver.go controlPTZ (DOC-CONFIRMED
         # physical limits) — validated in both mock and live mode so an agent can't learn
         # a range in mock that then fails against real hardware. speed has no documented
@@ -165,7 +166,6 @@ class OpenAVClient:
             raise ValueError("tilt must be -30..90")
         if speed <= 0:
             raise ValueError("speed must be positive")
-        self._require_kind(device, "ec20")
         if not self.config.mock:
             await self._device_put(
                 self.config.ec20_service_url,

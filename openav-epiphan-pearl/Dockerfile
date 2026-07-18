@@ -1,4 +1,4 @@
-FROM golang:1.25 AS builder
+FROM golang:1.25@sha256:d2e20dc1b35aefd666909163e4ace41efb521359aa2ce31fff59d86837050f6f AS builder
 
 COPY source /go/src
 COPY go.mod go.sum /go/
@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 go build -tags timetzdata -o /go/bin/microservice
 RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
     && setcap 'cap_net_bind_service=+ep' /go/bin/microservice
 
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 RUN adduser -D -H -u 10001 svc
 COPY --from=builder /go/bin/microservice /usr/local/bin/microservice
 EXPOSE 80

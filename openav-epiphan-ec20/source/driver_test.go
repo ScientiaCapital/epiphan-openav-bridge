@@ -901,14 +901,30 @@ func TestControlPTZ_CustomSpeedIsForwarded(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc(ec20EndpointPan, func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		panSpeed = body["speed"].(float64)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("pan: failed to decode request body: %v", err)
+			return
+		}
+		speed, ok := body["speed"].(float64)
+		if !ok {
+			t.Errorf("pan: expected numeric 'speed' in body, got %v", body["speed"])
+			return
+		}
+		panSpeed = speed
 		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 	})
 	mux.HandleFunc(ec20EndpointTilt, func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
-		tiltSpeed = body["speed"].(float64)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("tilt: failed to decode request body: %v", err)
+			return
+		}
+		speed, ok := body["speed"].(float64)
+		if !ok {
+			t.Errorf("tilt: expected numeric 'speed' in body, got %v", body["speed"])
+			return
+		}
+		tiltSpeed = speed
 		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 	})
 	mux.HandleFunc(ec20EndpointZoom, func(w http.ResponseWriter, r *http.Request) {

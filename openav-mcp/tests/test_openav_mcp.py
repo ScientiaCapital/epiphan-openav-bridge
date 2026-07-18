@@ -174,6 +174,21 @@ class TestConfigLoading:
         assert "missing required field 'alias'" in message
         assert "s3cret" not in message  # never echo values, only field names
 
+    @pytest.mark.parametrize(
+        "raw", ['{"alias": "x"}', "5", '"just a string"', "null"]
+    )
+    def test_non_list_top_level_raises_clean_error(self, monkeypatch, raw) -> None:
+        # Valid JSON, but not a list — used to crash with an uncaught
+        # AttributeError/TypeError instead of a clean config error.
+        monkeypatch.setenv("OPENAV_DEVICES", raw)
+        with pytest.raises(ValueError, match="must be a JSON list"):
+            load_config_from_env()
+
+    def test_non_object_list_entry_raises_clean_error(self, monkeypatch) -> None:
+        monkeypatch.setenv("OPENAV_DEVICES", '["not-an-object"]')
+        with pytest.raises(ValueError, match=r"OPENAV_DEVICES\[0\] must be an object"):
+            load_config_from_env()
+
 
 class TestCredentialSafety:
     @pytest.mark.asyncio
