@@ -53,6 +53,10 @@ run_scene -> {"ok": true, ... "steps": [ ...tracking..., ...record... ]}
 ROUND-TRIP OK
 ```
 
+For a full narrated walkthrough (a whole lecture-capture scenario + read-only safety
+gate + credential-leak assertion), run `python scripts/demo_smart_room.py` — it also
+regenerates the shareable **[openav-mcp/DEMO.md](openav-mcp/DEMO.md)**.
+
 ## 2. Full agentic path — plain English → room (mock, needs a local model)
 
 The SilkRoute orchestrator decides which tools to call. Needs [Ollama](https://ollama.com) + a model.

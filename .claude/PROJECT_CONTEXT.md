@@ -1,6 +1,6 @@
 # epiphan-openav-bridge
 
-**Branch**: main | **Updated**: 2026-07-17 (EC20 doc-driven unblock sprint)
+**Branch**: main | **Updated**: 2026-07-18 (mock-mode smart-room demo asset)
 
 ## Status
 Go microservices bridging Dartmouth **OpenAV** ↔ Epiphan **Pearl + EC20**, plus a new **`openav-mcp`**
@@ -10,16 +10,16 @@ Epiphan docs**; only the REST URL *paths* remain PLACEHOLDER pending a hardware 
 built (round-trip verified). Positioning: OpenAV = brains, Epiphan = reliable hardware, agent =
 backbone above — stay separate ("Epiphan hardware running OpenAV", never "Epiphan OpenAV").
 
-## Done (This Session — EC20 doc-driven unblock)
-- **Mined Epiphan's own docs** (EC20 AI User Guide + Q-SYS plugin README via Epiphan Knowledge) to
-  de-risk EC20 without hardware. Findings logged in `.claude/programs/ec20-api-discovery.md`.
-- **Fixed a real preset bug** in `driver.go`: `validatePresetID` rejected preset 0 (range was 1–255);
-  docs confirm range is **0–255** (preset 0 is valid). Now corrected + tested.
-- Added **DOC-CONFIRMED validation**: tracking modes restricted to `presenter`/`zone`; PTZ range
-  checks (pan ±162.5°, tilt −30°..+90°). New tests; both Go suites green (Pearl 63, EC20 84 runs).
-- Built **`ec20_probe.sh`** — non-destructive (GET-only) hardware-confirmation harness implementing
-  the discovery program. Verified end-to-end in dry mode. Makes hardware day a ~30-min job.
-- Refreshed observers (`QUALITY.md` 0 blockers; 2 stale warnings confirmed already resolved).
+## Done (This Session — mock-mode smart-room demo asset)
+- Built **`openav-mcp/scripts/demo_smart_room.py`** — a narrated, hardware-free demo of an AI agent
+  running a full lecture capture in Room 320B over the real MCP protocol (discover → frame preset →
+  PTZ → track → record → confirm-via-status → stop), + a `--read-only` safety-gate showcase and a
+  credential-leak assertion. Generates the shareable **`openav-mcp/DEMO.md`** walkthrough.
+- **Fixed a cross-layer drift bug**: the Python `ec20_preset_recall` still rejected preset 0 (`1-255`)
+  after yesterday's Go fix (`0-255`). Synced `client.py` + `server.py`; added preset-0 tests.
+- Tests green (openav-mcp 13 pass, ruff clean); linked DEMO.md from README + HANDOFF.
+- Prior session (2026-07-17): EC20 doc-driven unblock — preset bug fix, PTZ/tracking validation,
+  `ec20_probe.sh` harness (shipped to main).
 
 ## Today's Focus (next session)
 1. [ ] **Confirm EC20 paths on hardware** — run `bash openav-epiphan-ec20/ec20_probe.sh` against a real
@@ -27,6 +27,7 @@ backbone above — stay separate ("Epiphan hardware running OpenAV", never "Epip
 2. [ ] **Live bring-up** — `cd demo && docker compose up` (Pearl + EC20 + OpenAV orchestrator), point
        `openav-mcp` at it (drop `OPENAV_MOCK`), run the agent path in `HANDOFF.md` §3.
 3. [ ] **Publish/CI `openav-mcp`** — add CI + package it for the OpenAV community (open-core).
+       DEMO.md is now a ready-made asset for the Phase 4 blog post.
 
 ## Blockers
 - EC20 REST URL *paths* still need a hardware probe (behavior is doc-confirmed; harness is ready).

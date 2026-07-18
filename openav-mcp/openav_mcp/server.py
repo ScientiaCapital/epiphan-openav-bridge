@@ -64,7 +64,7 @@ _SPECS: list[_Spec] = [
           _schema({**_DEVICE, "action": {"type": "string", "enum": ["enable", "disable"]},
                    "mode": {"type": "string", "default": "presenter"}},
                   ["device", "action"]), False, "ec20_tracking"),
-    _Spec("ec20_preset_recall", "Recall an EC20 PTZ preset (1-255).",
+    _Spec("ec20_preset_recall", "Recall an EC20 PTZ preset (0-255).",
           _schema({**_DEVICE, "preset_id": {"type": "integer"}}, ["device", "preset_id"]),
           False, "ec20_preset_recall"),
     _Spec("ec20_status", "Get an EC20 camera's status (incl. tracking).",

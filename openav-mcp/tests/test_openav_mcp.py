@@ -70,6 +70,21 @@ class TestDeviceLayer:
         assert out["mode"] == "presenter"
 
     @pytest.mark.asyncio
+    async def test_ec20_preset_zero_is_valid(self) -> None:
+        # Preset 0 is valid per EC20 docs (home/podium framing). Mirrors the Go
+        # driver's validatePresetID 0-255 fix — keeps the two layers in sync.
+        c = _client()
+        out = await c.ec20_preset_recall("room-320b-cam", 0)
+        assert out["preset_id"] == 0
+        assert out["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_ec20_preset_out_of_range_errors(self) -> None:
+        c = _client()
+        with pytest.raises(ValueError):
+            await c.ec20_preset_recall("room-320b-cam", 256)
+
+    @pytest.mark.asyncio
     async def test_unknown_device_errors(self) -> None:
         c = _client()
         with pytest.raises(KeyError):

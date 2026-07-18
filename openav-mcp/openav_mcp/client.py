@@ -140,8 +140,8 @@ class OpenAVClient:
         return {"device": device, "action": action, "mode": mode, "ok": True}
 
     async def ec20_preset_recall(self, device: str, preset_id: int) -> dict[str, Any]:
-        if not 1 <= preset_id <= 255:
-            raise ValueError("preset_id must be 1-255")
+        if not 0 <= preset_id <= 255:
+            raise ValueError("preset_id must be 0-255")
         if not self.config.mock:
             await self._device_put(self.config.ec20_service_url, device, f"preset/{preset_id}", "")
         else:

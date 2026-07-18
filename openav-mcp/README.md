@@ -45,6 +45,17 @@ OPENAV_EC20_URL=http://localhost:8082 OPENAV_DEVICES='[...]' python -m openav_mc
 Config env: `OPENAV_ORCHESTRATOR_URL`, `OPENAV_PEARL_URL`, `OPENAV_EC20_URL`,
 `OPENAV_DEVICES` (JSON), `OPENAV_MOCK`.
 
+## Demo
+
+See **[DEMO.md](DEMO.md)** for a narrated, hardware-free walkthrough — an AI agent
+running a full lecture capture in Room 320B over the real MCP protocol (discover →
+frame → track → record → confirm → stop), with the read-only safety gate and the
+no-credential-leak guarantee. Regenerate it any time:
+
+```bash
+python scripts/demo_smart_room.py      # narrated run + refreshes DEMO.md
+```
+
 ## Test
 ```bash
 pip install -e ".[dev]" && pytest -q
