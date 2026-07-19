@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,27 +87,17 @@ func ec20APIRequest(socketKey, function, method, endpoint string, jsonBody []byt
 	host, username, password := parseSocketKey(socketKey)
 	url := "http://" + host + endpoint
 
-	var reqBody io.Reader
 	if jsonBody != nil {
-		reqBody = bytes.NewBuffer(jsonBody)
 		framework.Log(function + " - " + method + " " + url + " body: " + string(jsonBody))
 	} else {
 		framework.Log(function + " - " + method + " " + url)
 	}
 
+	// The EC20 (lighttpd) requires HTTP Digest auth, not Basic. ec20DoWithDigest
+	// performs the request, transparently answering a Digest challenge; it falls
+	// back to Basic for servers that don't advertise Digest.
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error creating request: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	req.SetBasicAuth(username, password)
-	if jsonBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := client.Do(req)
+	resp, err := ec20DoWithDigest(client, method, url, jsonBody, username, password)
 	if err != nil {
 		errMsg := fmt.Sprintf(function+" - error doing %s: %v", method, err)
 		framework.AddToErrors(socketKey, errMsg)
@@ -135,6 +128,149 @@ func ec20APIRequest(socketKey, function, method, endpoint string, jsonBody []byt
 	}
 
 	return bodyBytes, nil
+}
+
+// ec20NewRequest builds a request with an optional JSON body, setting the
+// Content-Type header when a body is present. The body is rebuilt from jsonBody
+// on each call so a request can be safely re-sent (needed for the Digest retry).
+func ec20NewRequest(method, url string, jsonBody []byte) (*http.Request, error) {
+	var body io.Reader
+	if jsonBody != nil {
+		body = bytes.NewBuffer(jsonBody)
+	}
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if jsonBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
+
+// ec20DoWithDigest performs an HTTP request against the EC20, transparently
+// handling an HTTP Digest challenge. The real EC20 (lighttpd/1.4.75) answers with
+// "WWW-Authenticate: Digest ... algorithm=MD5, qop=auth" and rejects Basic auth,
+// so a Basic-only client 401s regardless of correct credentials. Go's stdlib has
+// no Digest client; this implements RFC 2617 (MD5, qop=auth) with only crypto/md5
+// and crypto/rand — no external dependency, preserving the Docker/GPL-3.0 posture.
+// If the server does not advertise Digest, it falls back to Basic auth.
+func ec20DoWithDigest(client *http.Client, method, url string, jsonBody []byte, username, password string) (*http.Response, error) {
+	// First attempt with no credentials — obtain the challenge (or a direct 2xx).
+	req, err := ec20NewRequest(method, url, jsonBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil // no authentication required
+	}
+	challenge := resp.Header.Get("WWW-Authenticate")
+	resp.Body.Close()
+
+	req2, err := ec20NewRequest(method, url, jsonBody)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(challenge)), "digest") {
+		header, err := ec20DigestAuthHeader(challenge, method, req2.URL.RequestURI(), username, password)
+		if err != nil {
+			return nil, err
+		}
+		req2.Header.Set("Authorization", header)
+	} else {
+		req2.SetBasicAuth(username, password)
+	}
+	return client.Do(req2)
+}
+
+// ec20DigestAuthHeader builds an RFC 2617 Digest "Authorization" header for the
+// given challenge, request method and URI. Supports algorithm=MD5 with qop="auth"
+// (and the legacy qop-absent form).
+func ec20DigestAuthHeader(challenge, method, uri, username, password string) (string, error) {
+	p := parseDigestChallenge(challenge)
+	realm, nonce, qop, opaque := p["realm"], p["nonce"], p["qop"], p["opaque"]
+
+	ha1 := md5Hex(username + ":" + realm + ":" + password)
+	ha2 := md5Hex(method + ":" + uri)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `Digest username="%s", realm="%s", nonce="%s", uri="%s", algorithm=MD5`,
+		username, realm, nonce, uri)
+
+	var response string
+	if strings.Contains(qop, "auth") {
+		cnonce, err := ec20Cnonce()
+		if err != nil {
+			return "", err
+		}
+		const nc = "00000001"
+		response = md5Hex(strings.Join([]string{ha1, nonce, nc, cnonce, "auth", ha2}, ":"))
+		fmt.Fprintf(&b, `, qop=auth, nc=%s, cnonce="%s"`, nc, cnonce)
+	} else {
+		response = md5Hex(ha1 + ":" + nonce + ":" + ha2)
+	}
+	fmt.Fprintf(&b, `, response="%s"`, response)
+	if opaque != "" {
+		fmt.Fprintf(&b, `, opaque="%s"`, opaque)
+	}
+	return b.String(), nil
+}
+
+// parseDigestChallenge parses a "Digest k=v, ..." WWW-Authenticate header into a
+// map, splitting on commas that are not inside quoted values.
+func parseDigestChallenge(challenge string) map[string]string {
+	body := strings.TrimSpace(challenge)
+	if i := strings.IndexByte(body, ' '); i >= 0 && strings.EqualFold(body[:i], "Digest") {
+		body = body[i+1:]
+	}
+	out := map[string]string{}
+	var cur strings.Builder
+	inQuotes := false
+	flush := func() {
+		part := strings.TrimSpace(cur.String())
+		cur.Reset()
+		if part == "" {
+			return
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			return
+		}
+		key := strings.ToLower(strings.TrimSpace(kv[0]))
+		out[key] = strings.Trim(strings.TrimSpace(kv[1]), `"`)
+	}
+	for _, r := range body {
+		switch {
+		case r == '"':
+			inQuotes = !inQuotes
+			cur.WriteRune(r)
+		case r == ',' && !inQuotes:
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return out
+}
+
+// md5Hex returns the lowercase hex MD5 of s (the hash primitive for RFC 2617).
+func md5Hex(s string) string {
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// ec20Cnonce returns a random client nonce for the Digest handshake.
+func ec20Cnonce() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // checkAPIStatus returns an error if result carries a tolerant "status" field != "ok".

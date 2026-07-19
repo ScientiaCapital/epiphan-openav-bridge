@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/md5"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1584,5 +1587,95 @@ func TestSavePreset_NameTooLong(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "too long") {
 		t.Errorf("expected 'too long' in error, got: %v", err)
+	}
+}
+
+// md5hex is a test helper mirroring the real EC20's MD5 digest computation.
+func md5hex(s string) string {
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// parseDigestHeader parses an "Authorization: Digest k=v, ..." header into a map.
+// Test-only; our controlled values never contain commas inside quoted fields.
+func parseDigestHeader(h string) map[string]string {
+	out := map[string]string{}
+	for _, part := range strings.Split(strings.TrimPrefix(h, "Digest "), ",") {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		out[strings.TrimSpace(kv[0])] = strings.Trim(strings.TrimSpace(kv[1]), `"`)
+	}
+	return out
+}
+
+// mockEC20DigestAPI simulates the real EC20: it demands HTTP Digest auth
+// (realm="", MD5, qop="auth" — exactly what lighttpd/1.4.75 on the device sends)
+// and rejects Basic auth. On a valid Digest response it serves /api/status.
+// It recomputes the expected response from the client's own nonce/nc/cnonce so
+// the test genuinely exercises our client's digest math, not a stub.
+func mockEC20DigestAPI(t *testing.T) *httptest.Server {
+	t.Helper()
+	const realm = ""
+	const nonce = "6a5bb5d7:testnonce"
+
+	challenge := func(w http.ResponseWriter) {
+		w.Header().Set("WWW-Authenticate",
+			fmt.Sprintf(`Digest realm="%s", charset="UTF-8", algorithm=MD5, nonce="%s", qop="auth"`, realm, nonce))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	}
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		authz := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authz, "Digest ") {
+			challenge(w) // Basic auth (or none) is rejected — this is the whole point
+			return
+		}
+		p := parseDigestHeader(authz)
+		ha1 := md5hex("admin:" + realm + ":testpass")
+		ha2 := md5hex(r.Method + ":" + p["uri"])
+		expected := md5hex(strings.Join([]string{ha1, p["nonce"], p["nc"], p["cnonce"], p["qop"], ha2}, ":"))
+		if p["username"] != "admin" || p["response"] != expected {
+			challenge(w)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ok",
+			"result": map[string]interface{}{"model": "EC20"},
+		})
+	}
+	return httptest.NewServer(http.HandlerFunc(handler))
+}
+
+// TestEC20APIGet_DigestAuth_Success proves the driver can authenticate against a
+// device that requires HTTP Digest (the real EC20 does; Basic auth is rejected).
+func TestEC20APIGet_DigestAuth_Success(t *testing.T) {
+	server := mockEC20DigestAPI(t)
+	defer server.Close()
+
+	socketKey := socketKeyFromServer(server)
+	result, err := ec20APIGet(socketKey, ec20EndpointStatus)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result["status"] != "ok" {
+		t.Errorf("expected status ok, got %v", result["status"])
+	}
+}
+
+// TestEC20APIGet_DigestAuth_WrongPassword ensures a bad password still fails
+// under the digest handshake (no silent success).
+func TestEC20APIGet_DigestAuth_WrongPassword(t *testing.T) {
+	server := mockEC20DigestAPI(t)
+	defer server.Close()
+
+	addr := strings.TrimPrefix(server.URL, "http://")
+	socketKey := "admin:wrongpass@" + addr
+
+	_, err := ec20APIGet(socketKey, ec20EndpointStatus)
+	if err == nil {
+		t.Fatal("expected error for wrong password under digest auth")
 	}
 }

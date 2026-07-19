@@ -10,6 +10,9 @@ Inspired by [Karpathy's autoresearch](https://github.com/karpathy/autoresearch):
 
 - **One modifiable file:** `openav-epiphan-ec20/source/driver.go` (endpoint constants only, lines 23-34)
 - **One metric:** HTTP response code — 200 = confirmed, 4xx = discard, 3xx = follow redirect
+  > ⚠️ **Falsified on hardware 2026-07-18:** this device returns **HTTP 200 with body
+  > `{"err":"Invalid API command"}`** for unknown `/api/` commands. HTTP status is NOT a
+  > reliable signal — the JSON body must be inspected. See LIVE HARDWARE DISCOVERY below.
 - **Fixed time budget:** 30 seconds per endpoint probe
 - **Requires:** Real EC20 camera accessible on local network
 
@@ -159,7 +162,7 @@ DOC-CONFIRMED** and were applied directly to `driver.go` — no hardware require
 | Pan speed | 1.8°–80°/s | AI User Guide, PTZ specs |
 | Tilt speed | 1.5°–49°/s | AI User Guide, PTZ specs |
 | HTTP port | **80** (default; configurable 1025–65535) | AI User Guide, Network > Port |
-| Auth | HTTP Basic, default `admin` / `admin` | AI User Guide, Web Interface |
+| Auth | ~~HTTP Basic~~ **HTTP Digest** (MD5/qop=auth), default `admin` / `admin` | ⚠️ corrected on hardware 2026-07-18 — see LIVE DISCOVERY; Basic → 401 always |
 | Preview stream | MJPEG (preview stream is second stream) | AI User Guide + Q-SYS README |
 
 > ⚠️ The Q-SYS plugin README shows presets "0–11" — that is only the *plugin's* default
@@ -175,22 +178,87 @@ DOC-CONFIRMED** and were applied directly to `driver.go` — no hardware require
 port 80 — inspect its JavaScript for the real `fetch`/XHR calls. That will reveal the REST
 path structure faster than brute-forcing the candidate lists.
 
+---
+
+## 🔴 LIVE HARDWARE DISCOVERY — 2026-07-18 (device @ 192.168.8.11, admin/admin)
+
+First live session against a real EC20. **Two headline findings supersede the assumptions above.**
+Full session fingerprint captured in scratch `ec20_live_findings.md`.
+
+### 1. Auth is HTTP **Digest**, not Basic — **FIXED in driver.go**
+`lighttpd/1.4.75` answers every request with `WWW-Authenticate: Digest realm="", algorithm=MD5,
+qop="auth"`. Basic → **401** always; `curl --digest -u admin:admin` → **200**. The driver's
+`req.SetBasicAuth` was broken against real hardware regardless of credentials.
+- **Fix landed:** `ec20APIRequest` → `ec20DoWithDigest`, an RFC 2617 MD5/qop=auth handshake using
+  stdlib only (`crypto/md5`, `crypto/rand`) — **no new dependency**. Falls back to Basic for
+  non-Digest servers (keeps mocks green). `ec20_probe.sh` now uses `curl --digest`.
+- **Tests:** `TestEC20APIGet_DigestAuth_Success` / `_WrongPassword` with a mock that recomputes and
+  validates the digest response (not a stub). Full suite green.
+
+### 2. The real API is **CGI/VISCA**, not RESTful `/api/*` — all 12 placeholders are wrong in *model*
+Reverse-engineered from the web-UI JS (`/js/build-new.min.js`). The device is a rebadged Chinese ODM
+AI-tracking PTZ camera; the `ptzctrl.cgi`/`param.cgi` grammar matches **SMTAV** BA20S/BA30S (publicly
+documented). Epiphan's *official* integration story is VISCA-over-IP :52381 + ONVIF — they do **not**
+publicly document this CGI surface (no Swagger/REST spec exists, unlike Pearl).
+
+- **PTZ / zoom / focus / preset / tracking** → `POST /cgi-bin/ptzctrl.cgi?ptzcmd&...`
+  (public grammar, cross-checked vs SMTAV):
+
+  | Action | Request |
+  |--------|---------|
+  | Pan/tilt | `ptzctrl.cgi?ptzcmd&<up\|down\|left\|right\|leftup\|rightup\|leftdown\|rightdown\|ptzstop>&<panSpeed 1-24>&<tiltSpeed 1-20>` |
+  | Zoom | `ptzctrl.cgi?ptzcmd&<zoomin\|zoomout\|zoomstop>&<speed 1-7>` |
+  | Focus | `ptzctrl.cgi?ptzcmd&<focusin\|focusout\|focusstop>&<speed 1-7>` |
+  | Preset save/call | `ptzctrl.cgi?ptzcmd&<posset\|poscall>&<N>` (0-89 range1, 100-254 range2) |
+  | Home | `ptzctrl.cgi?ptzcmd&home` |
+  | Absolute PTZ | `ptzctrl.cgi?ptzcmd&ABS&<panSpd>&<tiltSpd>&<panPos hex4>&<tiltPos hex4>` |
+  | Absolute zoom | `ptzctrl.cgi?ptzcmd&zoomto&<speed>&<pos 0000-4000>` |
+  | AI tracking | `ptzctrl.cgi?post_aimode&<Single_Track\|Frame_Track\|Demo_Mode\|Off>`; status `?get_aimode` → VISCA `90 50 0p FF` (02=On, 03=Off) |
+  | Nav/OSD | `ptzctrl.cgi?navigate_mode&<OSD\|PTZ\|CONFIRM\|OSD_BACK>`, `?osdcmd`, `?post_image_value` |
+
+- **Config / status / record / stream / tracking-status** → `/cgi-bin/param.cgi?<command>` (~70
+  commands; **no public docs** — live fingerprint is the only source): `get_device_conf`,
+  `get_system_conf`, `get_target_status`(+`_head_face`)=tracking, `get_record_info`,
+  `udisk_save_record`, `post_streaming`, `get_media_video`/`post_media_video`, `post_reboot`,
+  `post_visca`, `get_ndi_info`, `get_roi`/`post_roi_conf`, `save_profile`/`apply_profile`/`remove_profile`.
+- **App-layer session (above Digest)**: `/cgi-bin/login.cgi?login|?logout`, `/cgi-bin/auth.cgi`; UI
+  sends a `jwt` request header; password MD5-hashed client-side. `param.cgi` GETs **HANG** with
+  Digest alone → they need the JWT session too. **No public docs.**
+- **Realtime**: WebSocket `ws://<host>:4567/ws/`. **No public docs.**
+- Quirk: unknown `/api/` commands return **200** with `{"err":"Invalid API command"}`.
+
+### Redesign scope (DEFERRED — separate session)
+A correct EC20 driver must: (a) HTTP Digest [**DONE**], (b) `login.cgi` JWT session, (c) `param.cgi` +
+`ptzctrl.cgi?ptzcmd` VISCA-style command model. This is a driver **redesign**, not a constant swap.
+PTZ/preset/zoom/tracking grammar is public (SMTAV); param.cgi/JWT/WebSocket are not.
+
+**Public ground-truth sources for the PTZ layer:**
+- SMTAV HTTP-CGI control — https://www.smtav.com/blogs/how-to-use-the-camera/http-cgi-control
+- SMTAV AI-tracking — https://www.smtav.com/blogs/how-to-use-the-camera/how-to-use-ai-tracking-cameras-tracking-function
+- SMTAV BA20S / BA30S manuals (ManualsLib)
+
+---
+
 ## Discovery Log
 
-| Endpoint | Placeholder Path | Probed | Result | Confirmed Path | Date |
-|----------|-----------------|--------|--------|---------------|------|
-| Status | /api/status | — | — | — | — |
-| Position | /api/ptz/position | — | — | — | — |
-| Pan | /api/ptz/pan | — | — | — | — |
-| Tilt | /api/ptz/tilt | — | — | — | — |
-| Zoom | /api/ptz/zoom | — | — | — | — |
-| Home | /api/ptz/home | — | — | — | — |
-| Presets | /api/ptz/presets | — | — | — | — |
-| Preset Goto | /api/ptz/preset/goto | — | — | — | — |
-| Preset Save | /api/ptz/preset/save | — | — | — | — |
-| Tracking On | /api/tracking/enable | — | — | — | — |
-| Tracking Off | /api/tracking/disable | — | — | — | — |
-| Preview | /api/preview | — | — | — | — |
+**All 12 RESTful placeholders are wrong in MODEL** (real API is CGI — see LIVE DISCOVERY above).
+Superseded 2026-07-18. Real targets below are ground-truth mappings for the deferred redesign.
+
+| Endpoint | Old placeholder (WRONG) | Real target (CGI) | Source |
+|----------|-------------------------|-------------------|--------|
+| Status | /api/status | `param.cgi?get_device_conf` / `get_system_conf` | live fingerprint |
+| Position | /api/ptz/position | (query via VISCA/`ptzctrl.cgi` inquiry — TBD) | live |
+| Pan | /api/ptz/pan | `ptzctrl.cgi?ptzcmd&<left\|right\|...>&<spd>` | SMTAV + live |
+| Tilt | /api/ptz/tilt | `ptzctrl.cgi?ptzcmd&<up\|down\|...>&<spd>` | SMTAV + live |
+| Zoom | /api/ptz/zoom | `ptzctrl.cgi?ptzcmd&<zoomin\|zoomout\|zoomstop>&<spd>` / `zoomto` | SMTAV + live |
+| Home | /api/ptz/home | `ptzctrl.cgi?ptzcmd&home` | SMTAV + live |
+| Presets | /api/ptz/presets | (list via `param.cgi` — TBD) | live |
+| Preset Goto | /api/ptz/preset/goto | `ptzctrl.cgi?ptzcmd&poscall&<N>` | SMTAV + live |
+| Preset Save | /api/ptz/preset/save | `ptzctrl.cgi?ptzcmd&posset&<N>` | SMTAV + live |
+| Tracking On | /api/tracking/enable | `ptzctrl.cgi?post_aimode&Single_Track` | SMTAV + live |
+| Tracking Off | /api/tracking/disable | `ptzctrl.cgi?post_aimode&Off` | SMTAV + live |
+| Preview | /api/preview | MJPEG 2nd stream (RTSP/HTTP — TBD) + `param.cgi?get_media_video` | live |
+| **Auth** | ~~Basic~~ | **HTTP Digest MD5/qop=auth — DONE** + `login.cgi` JWT session (TBD) | live |
 
 ## After Discovery
 

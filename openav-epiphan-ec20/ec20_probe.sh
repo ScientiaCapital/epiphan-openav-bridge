@@ -61,11 +61,14 @@ probe() {
     if [[ "$DRY_RUN" == "1" ]]; then
       code="DRY"; verdict="(dry-run: would GET ${BASE}${path})"
     else
+      # --digest: the real EC20 (lighttpd) requires HTTP Digest auth, not Basic.
+      # NOTE: this device returns HTTP 200 with body {"err":"Invalid API command"}
+      # for unknown /api/ commands, so a 200 alone is NOT proof — inspect the body.
       code=$(curl -s -o /dev/null -w '%{http_code}' \
-        --max-time "$TIMEOUT" -u "${USERNAME}:${PASSWORD}" \
+        --max-time "$TIMEOUT" --digest -u "${USERNAME}:${PASSWORD}" \
         -X GET "${BASE}${path}" 2>/dev/null)
       case "$code" in
-        200) verdict="CONFIRMED (GET 200)"; [[ -z "$found" ]] && found="$path" ;;
+        200) verdict="CONFIRMED? (GET 200 — verify body is not an error)"; [[ -z "$found" ]] && found="$path" ;;
         401) verdict="AUTH (path likely exists — check credentials)" ;;
         405) verdict="PATH EXISTS (405 — likely POST-only)"; [[ -z "$found" ]] && found="${path} (POST?)" ;;
         404) verdict="not found" ;;
@@ -85,7 +88,7 @@ log "Log file: ${LOG}"
 
 # ---- Preflight reachability (fast) so an unreachable host fails clean, not after 12×30s ----
 if [[ "$DRY_RUN" != "1" ]]; then
-  pre=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -u "${USERNAME}:${PASSWORD}" "${BASE}/" 2>/dev/null)
+  pre=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 --digest -u "${USERNAME}:${PASSWORD}" "${BASE}/" 2>/dev/null)
   if [[ "$pre" == "000" ]]; then
     log ""
     log "!! ${HOST}:${PORT} is unreachable (preflight timed out). Skipping probes."
