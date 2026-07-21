@@ -4,10 +4,13 @@ Stand up the full stack — the OpenAV **orchestrator** + the **Pearl** and **EC
 microservices + the **openav-mcp** AI layer — on a Raspberry Pi 5 (Ubuntu, ARM64), driving the real
 devices on the room LAN, auto-starting on boot.
 
-> **Device readiness:** the **Pearl Mini works end-to-end today**. The **EC20** control plane is
-> being finished (VISCA preset/jog/position/home are wired + hardware-verified over TCP `:5678`; AI
-> **tracking** is CGI-only and needs one live command probe — see the repo's
-> `.claude/programs/ec20-api-discovery.md`). Deploy now; EC20 tracking lands with the driver finish.
+> **Device readiness (honest status):** the **Pearl** microservice is implemented and
+> mock-verified (46 tests) — **live-hardware verification against a real Pearl is still
+> pending**; step 6 doubles as that first-contact check. The **EC20**'s VISCA control plane
+> (preset/jog/position/home over TCP `:5678`) **is hardware-verified** on a live camera;
+> absolute-degree moves await calibration, and AI **tracking** is CGI-only and needs one live
+> command probe — see `.claude/programs/ec20-api-discovery.md`. Deploy now; the pending pieces
+> land without redeploying the stack.
 
 ---
 
@@ -68,7 +71,8 @@ docker compose ps             # orchestrator + both microservices "Up"
 ```
 
 ## 6. Verify against the real devices
-**Pearl (works today)** — drive a recording through the orchestrator:
+**Pearl (first live-hardware contact — this step IS the verification)** — drive a recording
+through the orchestrator; if these succeed you've just live-verified the Pearl path:
 ```bash
 curl -X PUT http://localhost:8080/api/systems/smart-room-demo/state \
   -H 'Content-Type: application/json' \
@@ -92,12 +96,17 @@ curl http://localhost:8082/admin:admin@192.168.8.11/ptzposition        # {pan_un
 cd ../openav-mcp
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-export OPENAV_ORCHESTRATOR_URL=http://localhost:8080
-export OPENAV_PEARL_URL=http://localhost:8081
-export OPENAV_EC20_URL=http://localhost:8082
-export OPENAV_DEVICES='[
-  {"alias":"room-pearl","host":"192.168.8.4","username":"admin","password":"<pearl pw>","kind":"pearl"},
-  {"alias":"room-cam","host":"192.168.8.11","username":"admin","password":"admin","kind":"ec20"}]'
+# Write the env to a file — the SAME file backs this manual run AND the step-8
+# systemd unit (whose EnvironmentFile= would otherwise refuse to start).
+cat > .env <<'EOF'
+OPENAV_ORCHESTRATOR_URL=http://localhost:8080
+OPENAV_PEARL_URL=http://localhost:8081
+OPENAV_EC20_URL=http://localhost:8082
+OPENAV_DEVICES=[{"alias":"room-pearl","host":"192.168.8.4","username":"admin","password":"<pearl pw>","kind":"pearl"},{"alias":"room-cam","host":"192.168.8.11","username":"admin","password":"admin","kind":"ec20"}]
+EOF
+chmod 600 .env                    # it holds device credentials
+# edit .env to put the real Pearl password in, then load it into this shell:
+set -a; source .env; set +a
 # (do NOT set OPENAV_MOCK — that forces mock mode)
 python -m openav_mcp
 ```
