@@ -74,6 +74,9 @@ func doDeviceSpecificSet(socketKey string, setting string, arg1 string, arg2 str
 	case "tracking":
 		// PUT /:addr/tracking/:action  body=mode
 		return controlTracking(socketKey, arg1, arg2)
+	case "jog":
+		// PUT /:addr/jog/:dir/:speed
+		return jogPTZ(socketKey, arg1, arg2)
 	}
 
 	errMsg := function + " - unrecognized setting in URI: " + setting

@@ -2,7 +2,7 @@ package main
 
 // EC20 CGI app-layer authentication.
 //
-// Above lighttpd's transport HTTP Digest (see ec20DoWithDigest), the EC20's CGI
+// Above lighttpd's transport HTTP Digest (see ec20DigestAuthHeader), the EC20's CGI
 // surface has its OWN session layer: a custom challenge/response against
 // /cgi-bin/auth.cgi that grants a token carried in the `authorization` request
 // header on every subsequent CGI call. Reverse-engineered from the device web

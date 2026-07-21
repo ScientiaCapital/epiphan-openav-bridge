@@ -1,46 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"crypto/md5"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"net"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Dartmouth-OpenAV/microservice-framework/framework"
-)
-
-// ========== EC20 API Endpoint Constants ==========
-// The REST URL paths below are PLACEHOLDER values. The EC20's REST API paths are NOT
-// published in Epiphan's public docs (the AI User Guide, Q-SYS plugin README, and tech
-// specs all omit them — see .claude/programs/ec20-api-discovery.md, 2026-07-17 research).
-// Confirm them on real hardware with ec20_probe.sh, then update this block.
-//
-// NOTE: while the *paths* are unverified, the EC20's control *behavior* IS documented and
-// is enforced elsewhere in this file (DOC-CONFIRMED 2026-07-17): preset range 0-255,
-// tracking modes presenter/zone, pan ±162.5°, tilt -30°..+90°, HTTP port 80, Basic Auth.
-
-const (
-	ec20EndpointStatus      = "/api/status"           // PLACEHOLDER - GET device status
-	ec20EndpointPosition    = "/api/ptz/position"     // PLACEHOLDER - GET current PTZ position
-	ec20EndpointPan         = "/api/ptz/pan"          // PLACEHOLDER - POST {degrees, speed}
-	ec20EndpointTilt        = "/api/ptz/tilt"         // PLACEHOLDER - POST {degrees, speed}
-	ec20EndpointZoom        = "/api/ptz/zoom"         // PLACEHOLDER - POST {level}
-	ec20EndpointHome        = "/api/ptz/home"         // PLACEHOLDER - POST (no body)
-	ec20EndpointPresets     = "/api/ptz/presets"      // PLACEHOLDER - GET preset list
-	ec20EndpointPresetGoto  = "/api/ptz/preset/goto"  // PLACEHOLDER - POST {preset_id}
-	ec20EndpointPresetSave  = "/api/ptz/preset/save"  // PLACEHOLDER - POST {preset_id, name}
-	ec20EndpointTrackingOn  = "/api/tracking/enable"  // PLACEHOLDER - POST {mode}
-	ec20EndpointTrackingOff = "/api/tracking/disable" // PLACEHOLDER - POST (no body)
-	ec20EndpointPreview     = "/api/preview"          // PLACEHOLDER - GET (returns JPEG binary)
 )
 
 // parseSocketKey extracts host, username, and password from the framework socketKey.
@@ -77,114 +48,6 @@ func validatePresetID(presetID string) error {
 		return fmt.Errorf("presetID out of range (0-255): %d", id)
 	}
 	return nil
-}
-
-// ec20APIRequest performs an authenticated HTTP request to the EC20 REST API and returns the
-// raw response body. Shared by ec20APIGet/ec20APIPost/ec20APIPostJSON/ec20APIGetRaw.
-// logResponse=false skips logging the body (used for raw binary responses, e.g. JPEG preview,
-// where logging it as a string would be useless/huge).
-func ec20APIRequest(socketKey, function, method, endpoint string, jsonBody []byte, logResponse bool) ([]byte, error) {
-	host, username, password := parseSocketKey(socketKey)
-	url := "http://" + host + endpoint
-
-	if jsonBody != nil {
-		framework.Log(function + " - " + method + " " + url + " body: " + string(jsonBody))
-	} else {
-		framework.Log(function + " - " + method + " " + url)
-	}
-
-	// The EC20 (lighttpd) requires HTTP Digest auth, not Basic. ec20DoWithDigest
-	// performs the request, transparently answering a Digest challenge; it falls
-	// back to Basic for servers that don't advertise Digest.
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := ec20DoWithDigest(client, method, url, jsonBody, username, password)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error doing %s: %v", method, err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error reading response: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	if logResponse {
-		framework.Log(function + " - response: " + string(bodyBytes))
-	}
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		errMsg := function + " - 401 Unauthorized: check EC20 credentials"
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-	if resp.StatusCode != http.StatusOK {
-		errMsg := fmt.Sprintf(function+" - HTTP %d: %s", resp.StatusCode, string(bodyBytes))
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	return bodyBytes, nil
-}
-
-// ec20NewRequest builds a request with an optional JSON body, setting the
-// Content-Type header when a body is present. The body is rebuilt from jsonBody
-// on each call so a request can be safely re-sent (needed for the Digest retry).
-func ec20NewRequest(method, url string, jsonBody []byte) (*http.Request, error) {
-	var body io.Reader
-	if jsonBody != nil {
-		body = bytes.NewBuffer(jsonBody)
-	}
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, err
-	}
-	if jsonBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	return req, nil
-}
-
-// ec20DoWithDigest performs an HTTP request against the EC20, transparently
-// handling an HTTP Digest challenge. The real EC20 (lighttpd/1.4.75) answers with
-// "WWW-Authenticate: Digest ... algorithm=MD5, qop=auth" and rejects Basic auth,
-// so a Basic-only client 401s regardless of correct credentials. Go's stdlib has
-// no Digest client; this implements RFC 2617 (MD5, qop=auth) with only crypto/md5
-// and crypto/rand — no external dependency, preserving the Docker/GPL-3.0 posture.
-// If the server does not advertise Digest, it falls back to Basic auth.
-func ec20DoWithDigest(client *http.Client, method, url string, jsonBody []byte, username, password string) (*http.Response, error) {
-	// First attempt with no credentials — obtain the challenge (or a direct 2xx).
-	req, err := ec20NewRequest(method, url, jsonBody)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusUnauthorized {
-		return resp, nil // no authentication required
-	}
-	challenge := resp.Header.Get("WWW-Authenticate")
-	resp.Body.Close()
-
-	req2, err := ec20NewRequest(method, url, jsonBody)
-	if err != nil {
-		return nil, err
-	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(challenge)), "digest") {
-		header, err := ec20DigestAuthHeader(challenge, method, req2.URL.RequestURI(), username, password)
-		if err != nil {
-			return nil, err
-		}
-		req2.Header.Set("Authorization", header)
-	} else {
-		req2.SetBasicAuth(username, password)
-	}
-	return client.Do(req2)
 }
 
 // ec20DigestAuthHeader builds an RFC 2617 Digest "Authorization" header for the
@@ -273,127 +136,7 @@ func ec20Cnonce() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// checkAPIStatus returns an error if result carries a tolerant "status" field != "ok".
-// Tolerates responses without a "status" field since the EC20 response format is unknown.
-func checkAPIStatus(socketKey, function string, result map[string]interface{}) error {
-	if status, ok := result["status"].(string); ok && status != "ok" {
-		msg := ""
-		if m, ok := result["message"].(string); ok {
-			msg = m
-		}
-		errMsg := fmt.Sprintf(function+" - API error: %s - %s", status, msg)
-		framework.AddToErrors(socketKey, errMsg)
-		return errors.New(errMsg)
-	}
-	return nil
-}
-
-// ec20APIGet performs an authenticated GET request to the EC20 REST API.
-// Unlike Pearl, EC20 endpoints include the full path in constants (no /api/v2.0 prefix).
-func ec20APIGet(socketKey string, endpoint string) (map[string]interface{}, error) {
-	function := "ec20APIGet"
-
-	bodyBytes, err := ec20APIRequest(socketKey, function, "GET", endpoint, nil, true)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		errMsg := fmt.Sprintf(function+" - error parsing JSON: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	if err := checkAPIStatus(socketKey, function, result); err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
-// ec20APIPost performs an authenticated body-less POST request to the EC20 REST API.
-// Used for endpoints like home and tracking/disable that take no body.
-func ec20APIPost(socketKey string, endpoint string) error {
-	function := "ec20APIPost"
-
-	bodyBytes, err := ec20APIRequest(socketKey, function, "POST", endpoint, nil, true)
-	if err != nil {
-		return err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		// Some POST endpoints may not return JSON - that's OK
-		return nil
-	}
-
-	return checkAPIStatus(socketKey, function, result)
-}
-
-// ec20APIPostJSON performs an authenticated POST request with a JSON body.
-// Used for PTZ commands, preset operations, and tracking enable that require parameters.
-func ec20APIPostJSON(socketKey string, endpoint string, body map[string]interface{}) (map[string]interface{}, error) {
-	function := "ec20APIPostJSON"
-
-	jsonBytes, err := json.Marshal(body)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error marshaling JSON body: %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return nil, errors.New(errMsg)
-	}
-
-	respBytes, err := ec20APIRequest(socketKey, function, "POST", endpoint, jsonBytes, true)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBytes, &result); err != nil {
-		// Some POST endpoints may not return JSON - return empty map
-		return make(map[string]interface{}), nil
-	}
-
-	if err := checkAPIStatus(socketKey, function, result); err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
-// ec20APIGetRaw performs an authenticated GET request and returns the raw response bytes.
-// Used by getPreview for JPEG binary data — no JSON parsing attempted.
-func ec20APIGetRaw(socketKey string, endpoint string) ([]byte, error) {
-	return ec20APIRequest(socketKey, "ec20APIGetRaw", "GET", endpoint, nil, false)
-}
-
 // ========== GET functions ==========
-
-// fetchResultOrRaw calls ec20APIGet(endpoint) and marshals the "result" field, falling back to
-// the full response if EC20 returns data at the top level (shape unknown pending hardware) —
-// the shared shape of getCameraStatus/getPTZPosition/getPresets. fieldLabel feeds the
-// per-function error text (e.g. "error marshaling status: %v").
-func fetchResultOrRaw(socketKey, function, fieldLabel, endpoint string) (string, error) {
-	data, err := ec20APIGet(socketKey, endpoint)
-	if err != nil {
-		return "", err
-	}
-
-	result, ok := data["result"]
-	if !ok {
-		// EC20 may return data at top level rather than nested under "result"
-		result = data
-	}
-
-	jsonBytes, err := json.Marshal(result)
-	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error marshaling "+fieldLabel+": %v", err)
-		framework.AddToErrors(socketKey, errMsg)
-		return "", errors.New(errMsg)
-	}
-
-	return string(jsonBytes), nil
-}
 
 // readPTZUnits queries pan/tilt and zoom via VISCA inquiries, returning RAW VISCA
 // units (degrees require the Story-D calibration; until then we surface units so
@@ -450,19 +193,24 @@ func getPresets(socketKey string) (string, error) {
 	return `"unsupported: VISCA has no list-presets inquiry; recall/set by slot 0-255"`, nil
 }
 
+// getPreview returns the device's RTSP stream URL. The EC20 has no still-frame
+// preview endpoint on the control planes used here (VISCA/CGI); the live video is
+// the RTSP stream instead, so "preview" resolves to that URL for a client to open.
+// Port 554 is the RTSP default — the exact rtspport is device-configurable and can
+// be read via param.cgi?get_network_conf if it has been changed from the default.
 func getPreview(socketKey string) (string, error) {
 	function := "getPreview"
 	framework.Log(function + " - called for: " + socketKey)
 
-	rawBytes, err := ec20APIGetRaw(socketKey, ec20EndpointPreview)
-	if err != nil {
-		return "", err
+	host, _, _ := parseSocketKey(socketKey)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h // strip the framework-appended HTTP port; RTSP uses :554
 	}
 
-	encoded := base64.StdEncoding.EncodeToString(rawBytes)
-	jsonBytes, err := json.Marshal(encoded)
+	url := "rtsp://" + host + ":554/1"
+	jsonBytes, err := json.Marshal(url)
 	if err != nil {
-		errMsg := fmt.Sprintf(function+" - error marshaling preview: %v", err)
+		errMsg := fmt.Sprintf(function+" - error marshaling preview URL: %v", err)
 		framework.AddToErrors(socketKey, errMsg)
 		return "", errors.New(errMsg)
 	}
@@ -685,6 +433,63 @@ func savePreset(socketKey string, presetID string, name string) (string, error) 
 	}
 
 	return `"ok"`, nil
+}
+
+// jogPTZ drives continuous pan/tilt motion in a direction until stopped, via VISCA
+// pan-tilt drive (81 01 06 01 ...). Directions: up/down/left/right/upleft/upright/
+// downleft/downright/stop. "stop" halts motion (VISCA is continuous-drive).
+func jogPTZ(socketKey, dir, speedStr string) (string, error) {
+	function := "jogPTZ"
+	dir = strings.ToLower(strings.Trim(dir, `"`))
+	speedStr = strings.Trim(speedStr, `"`)
+	speed := 10
+	if speedStr != "" {
+		s, err := strconv.Atoi(speedStr)
+		if err != nil {
+			errMsg := fmt.Sprintf(function+" - invalid speed: %s", speedStr)
+			framework.AddToErrors(socketKey, errMsg)
+			return "", errors.New(errMsg)
+		}
+		speed = s
+	}
+	panDir, tiltDir, ok := jogDirection(dir)
+	if !ok {
+		errMsg := function + " - invalid direction: " + dir
+		framework.AddToErrors(socketKey, errMsg)
+		return "", errors.New(errMsg)
+	}
+	panSpeed := int(clampSpeed(speed, viscaPanSpeedMax))
+	tiltSpeed := int(clampSpeed(speed, viscaTiltSpeedMax))
+	if _, err := viscaSend(socketKey, viscaJog(panDir, tiltDir, panSpeed, tiltSpeed)); err != nil {
+		framework.AddToErrors(socketKey, function+" - "+err.Error())
+		return "", err
+	}
+	return `"ok"`, nil
+}
+
+// jogDirection maps a direction token to VISCA pan/tilt direction bytes.
+func jogDirection(dir string) (panDir, tiltDir byte, ok bool) {
+	switch dir {
+	case "left":
+		return viscaPanLeft, viscaTiltStop, true
+	case "right":
+		return viscaPanRight, viscaTiltStop, true
+	case "up":
+		return viscaPanStop, viscaTiltUp, true
+	case "down":
+		return viscaPanStop, viscaTiltDown, true
+	case "upleft":
+		return viscaPanLeft, viscaTiltUp, true
+	case "upright":
+		return viscaPanRight, viscaTiltUp, true
+	case "downleft":
+		return viscaPanLeft, viscaTiltDown, true
+	case "downright":
+		return viscaPanRight, viscaTiltDown, true
+	case "stop":
+		return viscaPanStop, viscaTiltStop, true
+	}
+	return 0, 0, false
 }
 
 func controlTracking(socketKey string, action string, mode string) (string, error) {

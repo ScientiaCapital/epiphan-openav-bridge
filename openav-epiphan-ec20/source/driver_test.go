@@ -2,279 +2,14 @@ package main
 
 import (
 	"crypto/md5"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
-
-// mockEC20API creates a test server that simulates EC20 REST API responses.
-func mockEC20API(t *testing.T) *httptest.Server {
-	t.Helper()
-
-	mux := http.NewServeMux()
-
-	// checkAuth validates Basic Auth on every handler.
-	checkAuth := func(w http.ResponseWriter, r *http.Request) bool {
-		user, pass, ok := r.BasicAuth()
-		if !ok || user != "admin" || pass != "testpass" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-
-	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ok",
-			"result": map[string]interface{}{
-				"model":    "EC20",
-				"firmware": "1.0.0",
-				"tracking": "enabled",
-				"position": map[string]interface{}{
-					"pan":  0,
-					"tilt": 0,
-					"zoom": 1,
-				},
-			},
-		})
-	})
-
-	mux.HandleFunc("/api/ptz/position", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ok",
-			"result": map[string]interface{}{
-				"pan":  45.0,
-				"tilt": -10.0,
-				"zoom": 2.0,
-			},
-		})
-	})
-
-	mux.HandleFunc("/api/ptz/pan", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			http.Error(w, "Expected application/json", http.StatusBadRequest)
-			return
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		if _, ok := body["degrees"]; !ok {
-			http.Error(w, "Missing degrees", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/ptz/tilt", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			http.Error(w, "Expected application/json", http.StatusBadRequest)
-			return
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		if _, ok := body["degrees"]; !ok {
-			http.Error(w, "Missing degrees", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/ptz/zoom", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			http.Error(w, "Expected application/json", http.StatusBadRequest)
-			return
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		if _, ok := body["level"]; !ok {
-			http.Error(w, "Missing level", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/ptz/home", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/ptz/presets", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ok",
-			"result": []interface{}{
-				map[string]interface{}{"id": "1", "name": "Center"},
-				map[string]interface{}{"id": "2", "name": "Wide"},
-			},
-		})
-	})
-
-	mux.HandleFunc("/api/ptz/preset/goto", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			http.Error(w, "Expected application/json", http.StatusBadRequest)
-			return
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		if _, ok := body["preset_id"]; !ok {
-			http.Error(w, "Missing preset_id", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/ptz/preset/save", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			http.Error(w, "Expected application/json", http.StatusBadRequest)
-			return
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		if _, ok := body["preset_id"]; !ok {
-			http.Error(w, "Missing preset_id", http.StatusBadRequest)
-			return
-		}
-		if _, ok := body["name"]; !ok {
-			http.Error(w, "Missing name", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/tracking/enable", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			http.Error(w, "Expected application/json", http.StatusBadRequest)
-			return
-		}
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-		if _, ok := body["mode"]; !ok {
-			http.Error(w, "Missing mode", http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/tracking/disable", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-
-	mux.HandleFunc("/api/preview", func(w http.ResponseWriter, r *http.Request) {
-		if !checkAuth(w, r) {
-			return
-		}
-		w.Header().Set("Content-Type", "image/jpeg")
-		w.Write([]byte{0xFF, 0xD8, 0xFF, 0xE0})
-	})
-
-	return httptest.NewServer(mux)
-}
-
-// socketKeyFromServer builds a socketKey from the test server URL.
-func socketKeyFromServer(server *httptest.Server) string {
-	addr := strings.TrimPrefix(server.URL, "http://")
-	return "admin:testpass@" + addr
-}
 
 // ========== fake VISCA-over-TCP device (motion control plane) ==========
 
@@ -417,361 +152,6 @@ func TestParseSocketKey_PasswordWithColon(t *testing.T) {
 	}
 }
 
-// ========== ec20APIGet tests ==========
-
-func TestEC20APIGet_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	result, err := ec20APIGet(socketKey, ec20EndpointStatus)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result["status"] != "ok" {
-		t.Errorf("expected status ok, got %v", result["status"])
-	}
-}
-
-func TestEC20APIGet_Unauthorized(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	_, err := ec20APIGet(socketKey, ec20EndpointStatus)
-	if err == nil {
-		t.Fatal("expected error for bad credentials")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected '401' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIGet_ConnectionRefused(t *testing.T) {
-	_, err := ec20APIGet("admin:testpass@127.0.0.1:1", ec20EndpointStatus)
-	if err == nil {
-		t.Fatal("expected error for connection refused")
-	}
-}
-
-func TestEC20APIGet_MalformedJSON(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("not valid json"))
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	_, err := ec20APIGet(socketKey, "/api/status")
-	if err == nil {
-		t.Fatal("expected error for malformed JSON")
-	}
-	if !strings.Contains(err.Error(), "parsing JSON") {
-		t.Errorf("expected 'parsing JSON' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIGet_APIError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "error",
-			"message": "Device busy",
-		})
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	_, err := ec20APIGet(socketKey, "/api/status")
-	if err == nil {
-		t.Fatal("expected error for API error response")
-	}
-	if !strings.Contains(err.Error(), "API error") {
-		t.Errorf("expected 'API error' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIGet_NonOKStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Not Found", http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	_, err := ec20APIGet(socketKey, "/api/status")
-	if err == nil {
-		t.Fatal("expected error for 404")
-	}
-	if !strings.Contains(err.Error(), "404") {
-		t.Errorf("expected '404' in error, got: %v", err)
-	}
-}
-
-// ========== ec20APIPost tests ==========
-
-func TestEC20APIPost_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	err := ec20APIPost(socketKey, "/api/ptz/home")
-	if err != nil {
-		t.Fatalf("non-JSON 200 response should not error, got: %v", err)
-	}
-}
-
-func TestEC20APIPost_Unauthorized(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	err := ec20APIPost(socketKey, ec20EndpointHome)
-	if err == nil {
-		t.Fatal("expected error for 401")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected '401' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIPost_ConnectionRefused(t *testing.T) {
-	err := ec20APIPost("admin:testpass@127.0.0.1:1", ec20EndpointHome)
-	if err == nil {
-		t.Fatal("expected error for connection refused")
-	}
-}
-
-func TestEC20APIPost_ServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	err := ec20APIPost(socketKey, "/api/ptz/home")
-	if err == nil {
-		t.Fatal("expected error for 500 response")
-	}
-	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("expected '500' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIPost_APIError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "error",
-			"message": "Camera busy",
-		})
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	err := ec20APIPost(socketKey, "/api/ptz/home")
-	if err == nil {
-		t.Fatal("expected error for API error response")
-	}
-	if !strings.Contains(err.Error(), "API error") {
-		t.Errorf("expected 'API error' in error, got: %v", err)
-	}
-}
-
-// ========== ec20APIPostJSON tests ==========
-
-func TestEC20APIPostJSON_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	result, err := ec20APIPostJSON(socketKey, ec20EndpointPan, map[string]interface{}{
-		"degrees": 45.0,
-		"speed":   50,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result["status"] != "ok" {
-		t.Errorf("expected status ok, got %v", result["status"])
-	}
-}
-
-func TestEC20APIPostJSON_Unauthorized(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	_, err := ec20APIPostJSON(socketKey, ec20EndpointPan, map[string]interface{}{
-		"degrees": 45.0,
-		"speed":   50,
-	})
-	if err == nil {
-		t.Fatal("expected error for 401")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected '401' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIPostJSON_ConnectionRefused(t *testing.T) {
-	_, err := ec20APIPostJSON("admin:testpass@127.0.0.1:1", ec20EndpointPan, map[string]interface{}{
-		"degrees": 45.0,
-	})
-	if err == nil {
-		t.Fatal("expected error for connection refused")
-	}
-}
-
-func TestEC20APIPostJSON_APIError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":  "error",
-			"message": "Invalid parameter",
-		})
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	_, err := ec20APIPostJSON(socketKey, "/api/ptz/pan", map[string]interface{}{
-		"degrees": 999,
-	})
-	if err == nil {
-		t.Fatal("expected error for API error response")
-	}
-	if !strings.Contains(err.Error(), "API error") {
-		t.Errorf("expected 'API error' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIPostJSON_NonJSONResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	result, err := ec20APIPostJSON(socketKey, "/api/ptz/pan", map[string]interface{}{
-		"degrees": 45.0,
-	})
-	if err != nil {
-		t.Fatalf("non-JSON 200 response should not error, got: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil empty map for non-JSON response")
-	}
-}
-
-func TestEC20APIPostJSON_ServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	_, err := ec20APIPostJSON(socketKey, "/api/ptz/pan", map[string]interface{}{
-		"degrees": 45.0,
-	})
-	if err == nil {
-		t.Fatal("expected error for 500 response")
-	}
-	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("expected '500' in error, got: %v", err)
-	}
-}
-
-// ========== ec20APIGetRaw tests ==========
-
-func TestEC20APIGetRaw_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	data, err := ec20APIGetRaw(socketKey, ec20EndpointPreview)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expected := []byte{0xFF, 0xD8, 0xFF, 0xE0}
-	if len(data) != len(expected) {
-		t.Fatalf("expected %d bytes, got %d", len(expected), len(data))
-	}
-	for i, b := range expected {
-		if data[i] != b {
-			t.Errorf("byte %d: expected 0x%02X, got 0x%02X", i, b, data[i])
-		}
-	}
-}
-
-func TestEC20APIGetRaw_Unauthorized(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	_, err := ec20APIGetRaw(socketKey, ec20EndpointPreview)
-	if err == nil {
-		t.Fatal("expected error for 401")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected '401' in error, got: %v", err)
-	}
-}
-
-func TestEC20APIGetRaw_ConnectionRefused(t *testing.T) {
-	_, err := ec20APIGetRaw("admin:testpass@127.0.0.1:1", ec20EndpointPreview)
-	if err == nil {
-		t.Fatal("expected error for connection refused")
-	}
-}
-
-func TestEC20APIGetRaw_NonOKStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Not Found", http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	_, err := ec20APIGetRaw(socketKey, "/api/preview")
-	if err == nil {
-		t.Fatal("expected error for 404")
-	}
-	if !strings.Contains(err.Error(), "404") {
-		t.Errorf("expected '404' in error, got: %v", err)
-	}
-}
-
 // ========== GET function tests ==========
 
 func TestGetCameraStatus_Success(t *testing.T) {
@@ -822,36 +202,24 @@ func TestGetPresets_Success(t *testing.T) {
 	}
 }
 
+// TestGetPreview_Success verifies preview now resolves to the device RTSP stream
+// URL (no network call): the framework-appended :80 host port is stripped and
+// :554 (the RTSP default) is used.
 func TestGetPreview_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	result, err := getPreview(socketKey)
+	result, err := getPreview("admin:x@127.0.0.1:80")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Result is a JSON-encoded base64 string (quoted)
-	var b64str string
-	err = json.Unmarshal([]byte(result), &b64str)
-	if err != nil {
+	var url string
+	if err := json.Unmarshal([]byte(result), &url); err != nil {
 		t.Fatalf("result is not a valid JSON string: %v", err)
 	}
-
-	decoded, err := base64.StdEncoding.DecodeString(b64str)
-	if err != nil {
-		t.Fatalf("result is not valid base64: %v", err)
+	if !strings.HasPrefix(url, "rtsp://") {
+		t.Errorf("expected an rtsp:// URL, got: %s", url)
 	}
-
-	expected := []byte{0xFF, 0xD8, 0xFF, 0xE0}
-	if len(decoded) != len(expected) {
-		t.Fatalf("expected %d decoded bytes, got %d", len(expected), len(decoded))
-	}
-	for i, b := range expected {
-		if decoded[i] != b {
-			t.Errorf("byte %d: expected 0x%02X, got 0x%02X", i, b, decoded[i])
-		}
+	if url != "rtsp://127.0.0.1:554/1" {
+		t.Errorf("expected rtsp://127.0.0.1:554/1, got: %s", url)
 	}
 }
 
@@ -933,11 +301,8 @@ func TestControlPTZ_CustomSpeedIsForwarded(t *testing.T) {
 }
 
 func TestControlPTZ_NonPositiveSpeedErrors(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := controlPTZ(socketKey, "0", "0", `{"zoom":1,"speed":0}`)
+	// Speed validation happens before any network call, so no device is needed.
+	_, err := controlPTZ("admin:x@127.0.0.1:80", "0", "0", `{"zoom":1,"speed":0}`)
 	if err == nil {
 		t.Fatal("expected error for non-positive speed")
 	}
@@ -947,11 +312,7 @@ func TestControlPTZ_NonPositiveSpeedErrors(t *testing.T) {
 }
 
 func TestControlPTZ_InvalidPan(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := controlPTZ(socketKey, "notanumber", "0", `{"zoom":1}`)
+	_, err := controlPTZ("admin:x@127.0.0.1:80", "notanumber", "0", `{"zoom":1}`)
 	if err == nil {
 		t.Fatal("expected error for invalid pan value")
 	}
@@ -961,11 +322,7 @@ func TestControlPTZ_InvalidPan(t *testing.T) {
 }
 
 func TestControlPTZ_InvalidTilt(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := controlPTZ(socketKey, "0", "notanumber", `{"zoom":1}`)
+	_, err := controlPTZ("admin:x@127.0.0.1:80", "0", "notanumber", `{"zoom":1}`)
 	if err == nil {
 		t.Fatal("expected error for invalid tilt value")
 	}
@@ -975,11 +332,7 @@ func TestControlPTZ_InvalidTilt(t *testing.T) {
 }
 
 func TestControlPTZ_InvalidZoom(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := controlPTZ(socketKey, "0", "0", "notanumber")
+	_, err := controlPTZ("admin:x@127.0.0.1:80", "0", "0", "notanumber")
 	if err == nil {
 		t.Fatal("expected error for invalid zoom value")
 	}
@@ -1002,13 +355,10 @@ func TestControlPTZ_DeviceError(t *testing.T) {
 }
 
 func TestControlPTZ_PanOutOfRange(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
 	// Pan limit is DOC-CONFIRMED ±162.5°; 200 is beyond the mechanical range.
+	// The range check happens before any network call.
 	for _, pan := range []string{"200", "-200"} {
-		_, err := controlPTZ(socketKey, pan, "0", `{"zoom":1}`)
+		_, err := controlPTZ("admin:x@127.0.0.1:80", pan, "0", `{"zoom":1}`)
 		if err == nil {
 			t.Fatalf("expected error for out-of-range pan %s", pan)
 		}
@@ -1019,13 +369,9 @@ func TestControlPTZ_PanOutOfRange(t *testing.T) {
 }
 
 func TestControlPTZ_TiltOutOfRange(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
 	// Tilt limit is DOC-CONFIRMED -30°..+90°; -45 and 120 are beyond range.
 	for _, tilt := range []string{"-45", "120"} {
-		_, err := controlPTZ(socketKey, "0", tilt, `{"zoom":1}`)
+		_, err := controlPTZ("admin:x@127.0.0.1:80", "0", tilt, `{"zoom":1}`)
 		if err == nil {
 			t.Fatalf("expected error for out-of-range tilt %s", tilt)
 		}
@@ -1061,6 +407,49 @@ func TestControlPTZHome_Success(t *testing.T) {
 	}
 	if result != `"ok"` {
 		t.Errorf("expected \"ok\", got %s", result)
+	}
+}
+
+// ========== jog tests ==========
+
+// TestJogPTZ_Up drives an upward jog and asserts the emitted VISCA pan-tilt drive
+// frame carries pan=stop, tilt=up (matching viscaJog(viscaPanStop, viscaTiltUp, …)).
+func TestJogPTZ_Up(t *testing.T) {
+	socketKey, frames := fakeVISCADevice(t)
+	result, err := jogPTZ(socketKey, "up", "10")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != `"ok"` {
+		t.Errorf("expected \"ok\", got %s", result)
+	}
+
+	var jog []byte
+	for _, f := range frames() {
+		// pan-tilt drive frame: 81 01 06 01 <panSpeed> <tiltSpeed> <panDir> <tiltDir> FF
+		if len(f) == 9 && f[0] == 0x81 && f[1] == 0x01 && f[2] == 0x06 && f[3] == 0x01 {
+			jog = f
+		}
+	}
+	if jog == nil {
+		t.Fatal("no pan-tilt drive frame (81 01 06 01) captured")
+	}
+	if jog[6] != viscaPanStop {
+		t.Errorf("pan dir byte = 0x%02X, want stop 0x%02X", jog[6], viscaPanStop)
+	}
+	if jog[7] != viscaTiltUp {
+		t.Errorf("tilt dir byte = 0x%02X, want up 0x%02X", jog[7], viscaTiltUp)
+	}
+}
+
+func TestJogPTZ_InvalidDirection(t *testing.T) {
+	// Direction validation happens before any network call.
+	_, err := jogPTZ("admin:x@127.0.0.1:80", "sideways", "10")
+	if err == nil {
+		t.Fatal("expected error for invalid direction")
+	}
+	if !strings.Contains(err.Error(), "invalid direction") {
+		t.Errorf("expected 'invalid direction' in error, got: %v", err)
 	}
 }
 
@@ -1136,11 +525,8 @@ func TestControlTracking_Disable(t *testing.T) {
 }
 
 func TestControlTracking_InvalidAction(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := controlTracking(socketKey, "toggle", "")
+	// The action switch rejects unknown actions before any network call.
+	_, err := controlTracking("admin:x@127.0.0.1:80", "toggle", "")
 	if err == nil {
 		t.Fatal("expected error for invalid action")
 	}
@@ -1192,61 +578,13 @@ func TestControlTracking_DefaultsToPresenter(t *testing.T) {
 }
 
 func TestControlTracking_InvalidMode(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := controlTracking(socketKey, "enable", "wander")
+	// Mode validation happens before any network call.
+	_, err := controlTracking("admin:x@127.0.0.1:80", "enable", "wander")
 	if err == nil {
 		t.Fatal("expected error for invalid tracking mode")
 	}
 	if !strings.Contains(err.Error(), "invalid tracking mode") {
 		t.Errorf("expected 'invalid tracking mode' in error, got: %v", err)
-	}
-}
-
-// ========== Mock server validation tests ==========
-
-func TestMockEC20API_PanValidatesBody(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	// POST /api/ptz/pan without Content-Type should fail
-	addr := strings.TrimPrefix(server.URL, "http://")
-	req, _ := http.NewRequest("POST", "http://"+addr+"/api/ptz/pan", nil)
-	req.SetBasicAuth("admin", "testpass")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		t.Error("expected non-200 for POST without Content-Type")
-	}
-}
-
-func TestMockEC20API_PresetGotoValidatesBody(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	// POST /api/ptz/preset/goto with missing preset_id should fail
-	addr := strings.TrimPrefix(server.URL, "http://")
-	body := strings.NewReader(`{"other":"value"}`)
-	req, _ := http.NewRequest("POST", "http://"+addr+"/api/ptz/preset/goto", body)
-	req.SetBasicAuth("admin", "testpass")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer resp.Body.Close()
-	io.ReadAll(resp.Body)
-
-	if resp.StatusCode == http.StatusOK {
-		t.Error("expected non-200 for POST missing preset_id")
 	}
 }
 
@@ -1297,17 +635,13 @@ func TestDoDeviceSpecificGet_Presets(t *testing.T) {
 }
 
 func TestDoDeviceSpecificGet_Preview(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	result, err := doDeviceSpecificGet(socketKey, "preview", "", "")
+	// preview routes to getPreview, which returns the RTSP stream URL (no network).
+	result, err := doDeviceSpecificGet("admin:x@127.0.0.1:80", "preview", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Preview returns a JSON-quoted base64 string
-	if len(result) == 0 {
-		t.Error("expected non-empty preview result")
+	if !strings.Contains(result, "rtsp://") {
+		t.Errorf("expected an rtsp:// URL in result, got: %s", result)
 	}
 }
 
@@ -1385,6 +719,18 @@ func TestDoDeviceSpecificSet_Tracking(t *testing.T) {
 	}
 }
 
+func TestDoDeviceSpecificSet_Jog(t *testing.T) {
+	socketKey, _ := fakeVISCADevice(t)
+	// PUT /:addr/jog/:dir/:speed
+	result, err := doDeviceSpecificSet(socketKey, "jog", "up", "10", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != `"ok"` {
+		t.Errorf("expected \"ok\", got %s", result)
+	}
+}
+
 func TestDoDeviceSpecificSet_Unknown(t *testing.T) {
 	_, err := doDeviceSpecificSet("admin:test@127.0.0.1:80", "unknown_setting", "", "", "")
 	if err == nil {
@@ -1442,11 +788,8 @@ func TestValidatePresetID_Invalid(t *testing.T) {
 }
 
 func TestRecallPreset_InvalidPresetID(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := recallPreset(socketKey, "999")
+	// validatePresetID rejects out-of-range IDs before any network call.
+	_, err := recallPreset("admin:x@127.0.0.1:80", "999")
 	if err == nil {
 		t.Fatal("expected error for out-of-range presetID")
 	}
@@ -1456,11 +799,8 @@ func TestRecallPreset_InvalidPresetID(t *testing.T) {
 }
 
 func TestSavePreset_InvalidPresetID(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	_, err := savePreset(socketKey, "abc", "TestPreset")
+	// validatePresetID rejects non-numeric IDs before any network call.
+	_, err := savePreset("admin:x@127.0.0.1:80", "abc", "TestPreset")
 	if err == nil {
 		t.Fatal("expected error for non-numeric presetID")
 	}
@@ -1470,12 +810,9 @@ func TestSavePreset_InvalidPresetID(t *testing.T) {
 }
 
 func TestSavePreset_NameTooLong(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	// The name-length guard fires before any network call.
 	longName := strings.Repeat("a", 65)
-	_, err := savePreset(socketKey, "1", longName)
+	_, err := savePreset("admin:x@127.0.0.1:80", "1", longName)
 	if err == nil {
 		t.Fatal("expected error for name longer than 64 chars")
 	}
@@ -1484,7 +821,10 @@ func TestSavePreset_NameTooLong(t *testing.T) {
 	}
 }
 
+// ========== digest auth tests ==========
+
 // md5hex is a test helper mirroring the real EC20's MD5 digest computation.
+// (Also used by cgiauth_test.go.)
 func md5hex(s string) string {
 	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
@@ -1504,72 +844,38 @@ func parseDigestHeader(h string) map[string]string {
 	return out
 }
 
-// mockEC20DigestAPI simulates the real EC20: it demands HTTP Digest auth
-// (realm="", MD5, qop="auth" — exactly what lighttpd/1.4.75 on the device sends)
-// and rejects Basic auth. On a valid Digest response it serves /api/status.
-// It recomputes the expected response from the client's own nonce/nc/cnonce so
-// the test genuinely exercises our client's digest math, not a stub.
-func mockEC20DigestAPI(t *testing.T) *httptest.Server {
-	t.Helper()
-	const realm = ""
-	const nonce = "6a5bb5d7:testnonce"
+// TestEC20DigestAuthHeader is a self-contained unit test of the driver's RFC 2617
+// Digest response math (used by the CGI transport layer): given a known MD5/qop=auth
+// challenge, it independently recomputes the expected response from the nc/cnonce the
+// generated header carries and asserts equality.
+func TestEC20DigestAuthHeader(t *testing.T) {
+	const (
+		realm    = "r"
+		nonce    = "n"
+		username = "admin"
+		password = "pass"
+		method   = "GET"
+		uri      = "/x"
+	)
+	challenge := `Digest realm="r", nonce="n", qop="auth", algorithm=MD5`
 
-	challenge := func(w http.ResponseWriter) {
-		w.Header().Set("WWW-Authenticate",
-			fmt.Sprintf(`Digest realm="%s", charset="UTF-8", algorithm=MD5, nonce="%s", qop="auth"`, realm, nonce))
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-	}
-
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		authz := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authz, "Digest ") {
-			challenge(w) // Basic auth (or none) is rejected — this is the whole point
-			return
-		}
-		p := parseDigestHeader(authz)
-		ha1 := md5hex("admin:" + realm + ":testpass")
-		ha2 := md5hex(r.Method + ":" + p["uri"])
-		expected := md5hex(strings.Join([]string{ha1, p["nonce"], p["nc"], p["cnonce"], p["qop"], ha2}, ":"))
-		if p["username"] != "admin" || p["response"] != expected {
-			challenge(w)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ok",
-			"result": map[string]interface{}{"model": "EC20"},
-		})
-	}
-	return httptest.NewServer(http.HandlerFunc(handler))
-}
-
-// TestEC20APIGet_DigestAuth_Success proves the driver can authenticate against a
-// device that requires HTTP Digest (the real EC20 does; Basic auth is rejected).
-func TestEC20APIGet_DigestAuth_Success(t *testing.T) {
-	server := mockEC20DigestAPI(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	result, err := ec20APIGet(socketKey, ec20EndpointStatus)
+	header, err := ec20DigestAuthHeader(challenge, method, uri, username, password)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result["status"] != "ok" {
-		t.Errorf("expected status ok, got %v", result["status"])
+
+	p := parseDigestHeader(header)
+	if p["username"] != username {
+		t.Errorf("username = %q, want %q", p["username"], username)
 	}
-}
+	if p["realm"] != realm || p["nonce"] != nonce || p["uri"] != uri {
+		t.Errorf("unexpected header fields: %+v", p)
+	}
 
-// TestEC20APIGet_DigestAuth_WrongPassword ensures a bad password still fails
-// under the digest handshake (no silent success).
-func TestEC20APIGet_DigestAuth_WrongPassword(t *testing.T) {
-	server := mockEC20DigestAPI(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	_, err := ec20APIGet(socketKey, ec20EndpointStatus)
-	if err == nil {
-		t.Fatal("expected error for wrong password under digest auth")
+	ha1 := md5hex(username + ":" + realm + ":" + password)
+	ha2 := md5hex(method + ":" + uri)
+	want := md5hex(strings.Join([]string{ha1, nonce, p["nc"], p["cnonce"], "auth", ha2}, ":"))
+	if p["response"] != want {
+		t.Errorf("response = %q, want %q", p["response"], want)
 	}
 }
