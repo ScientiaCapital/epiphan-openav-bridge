@@ -1,0 +1,27 @@
+# Deployment overlay for the permanent Raspberry Pi 5 room host.
+#
+# `docker compose up` auto-merges this file with docker-compose.yml (no -f needed).
+# It does two deploy-only things the base compose deliberately leaves out:
+#   1. Publishes the two microservice ports to the host so openav-mcp's DEVICE layer
+#      (OPENAV_PEARL_URL :8081 / OPENAV_EC20_URL :8082) can reach them. The base
+#      compose keeps them network-internal (orchestrator reaches them by service name).
+#   2. Restarts every service unless explicitly stopped, so the stack returns after a
+#      reboot / crash (pair with `sudo systemctl enable docker`).
+#
+# ARM64 note: if `docker manifest inspect ghcr.io/dartmouth-openav/orchestrator:latest`
+# shows NO arm64 entry, uncomment the orchestrator `platform:` line below and install
+# qemu/binfmt on the Pi (`docker run --privileged tonistiigi/binfmt --install all`).
+services:
+  orchestrator:
+    restart: unless-stopped
+    # platform: linux/amd64   # uncomment only if the image is amd64-only (emulated via qemu)
+
+  microservice-epiphan-pearl:
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+
+  microservice-epiphan-ec20:
+    restart: unless-stopped
+    ports:
+      - "8082:80"

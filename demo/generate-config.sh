@@ -175,13 +175,24 @@ sed_escape() {
     printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
 }
 
+# Portable in-place sed: GNU sed (Linux/Raspberry Pi) uses `-i`, while BSD sed
+# (macOS) requires an explicit empty backup suffix `-i ''`. Detect via --version
+# (GNU-only) so this script runs unchanged on the Pi deployment host and on macOS.
+sed_inplace() {
+    if sed --version >/dev/null 2>&1; then
+        sed -i "$@"      # GNU sed (Linux)
+    else
+        sed -i '' "$@"   # BSD sed (macOS)
+    fi
+}
+
 # Substitute placeholders with actual values using sed
 # Use | as delimiter to avoid conflicts with / in values
-sed -i '' "s|__PEARL_HOST__|$(sed_escape "$PEARL_HOST")|g" "$OUTPUT_FILE"
-sed -i '' "s|__PEARL_USERNAME__|$(sed_escape "$PEARL_USERNAME")|g" "$OUTPUT_FILE"
-sed -i '' "s|__PEARL_PASSWORD__|$(sed_escape "$PEARL_PASSWORD")|g" "$OUTPUT_FILE"
-sed -i '' "s|__EC20_HOST__|$(sed_escape "$EC20_HOST")|g" "$OUTPUT_FILE"
-sed -i '' "s|__EC20_USERNAME__|$(sed_escape "$EC20_USERNAME")|g" "$OUTPUT_FILE"
-sed -i '' "s|__EC20_PASSWORD__|$(sed_escape "$EC20_PASSWORD")|g" "$OUTPUT_FILE"
+sed_inplace "s|__PEARL_HOST__|$(sed_escape "$PEARL_HOST")|g" "$OUTPUT_FILE"
+sed_inplace "s|__PEARL_USERNAME__|$(sed_escape "$PEARL_USERNAME")|g" "$OUTPUT_FILE"
+sed_inplace "s|__PEARL_PASSWORD__|$(sed_escape "$PEARL_PASSWORD")|g" "$OUTPUT_FILE"
+sed_inplace "s|__EC20_HOST__|$(sed_escape "$EC20_HOST")|g" "$OUTPUT_FILE"
+sed_inplace "s|__EC20_USERNAME__|$(sed_escape "$EC20_USERNAME")|g" "$OUTPUT_FILE"
+sed_inplace "s|__EC20_PASSWORD__|$(sed_escape "$EC20_PASSWORD")|g" "$OUTPUT_FILE"
 
 echo "Generated: $OUTPUT_FILE"
