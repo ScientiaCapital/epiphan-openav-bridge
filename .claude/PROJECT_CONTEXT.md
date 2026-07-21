@@ -36,7 +36,7 @@ backbone above — stay separate ("Epiphan hardware running OpenAV", never "Epip
 ## Start here
 **`HANDOFF.md`** — verified no-hardware smoke test (`openav-mcp/scripts/roundtrip_demo.py`) + go-live.
 The agent that drives this lives in the sibling repo **`silkroute`** (its `README.md` "Agentic AV
-control plane"). Business strategy: `../epiphan-pi-strategic-report.md`.
+control plane").
 
 ## Tech Stack
 Go 1.25 (Echo microservices, GPL-3.0) | Python 3.11+ (`openav-mcp`: mcp + httpx + structlog) |

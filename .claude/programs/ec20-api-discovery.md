@@ -1,5 +1,13 @@
 # EC20 API Discovery Program
 
+> ✅ **REDESIGN COMPLETE (sprint `feat/ec20-hybrid-driver`, 2026-07-21).** The driver no longer uses the
+> RESTful `/api/*` placeholder model this program set out to discover — that model was wrong. It now runs
+> on the real, hardware-verified planes: **VISCA-over-IP (raw, TCP :5678)** for PTZ/presets/home/position,
+> and **CGI** (`/cgi-bin/auth.cgi` session token + `ptzctrl.cgi`/`param.cgi`) for AI tracking + status.
+> The placeholder-probe workflow below is kept for history and for the two remaining CONFIRM-ON-HARDWARE
+> items: the exact AI-tracking command and the degrees→VISCA-units PTZ calibration. See the
+> "🔴 LIVE HARDWARE DISCOVERY" section for the confirmed contract.
+
 Autoresearch-style program for systematically discovering the Epiphan EC20 PTZ camera's REST API endpoints.
 
 Inspired by [Karpathy's autoresearch](https://github.com/karpathy/autoresearch): one modifiable file, one metric, fixed time budget, iterate autonomously.
