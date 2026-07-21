@@ -96,6 +96,99 @@ func TestParseCGIChallenge(t *testing.T) {
 	}
 }
 
+// mockEC20CGIDevice serves the auth.cgi handshake PLUS a catch-all data endpoint
+// that requires the granted `authorization` token. rejectFirst>0 makes the data
+// endpoint 401 that many times (bare 401, no Digest challenge) before accepting —
+// exercising ec20CGISendGET's re-login-on-401 retry. The test asserts the MECHANISM
+// (a valid session token is attached), not the exact CGI command path.
+func mockEC20CGIDevice(t *testing.T, username, password string, rejectFirst int) *httptest.Server {
+	t.Helper()
+	const realm, nonce = "EC20", "srv-nonce"
+	const token = "AUTH_TOKEN_456"
+	challenge := base64.StdEncoding.EncodeToString([]byte(realm)) + "." +
+		base64.StdEncoding.EncodeToString([]byte(nonce)) + "." +
+		base64.StdEncoding.EncodeToString([]byte("auth"))
+	rejects := rejectFirst
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cgi-bin/auth.cgi", func(w http.ResponseWriter, r *http.Request) {
+		authz := r.Header.Get("authenticate")
+		if authz == "" {
+			w.Header().Set("WWW-Authenticate", challenge)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		p := parseAuthenticateHeaderTest(authz)
+		ha1 := md5hex(username + ":" + realm + ":" + password)
+		ha2 := md5hex("GET:" + p["uri"])
+		expected := md5hex(strings.Join([]string{ha1, p["nonce"], p["nc"], p["cnonce"], ha2}, ":"))
+		if p["username"] != username || p["response"] != expected {
+			w.WriteHeader(201)
+			return
+		}
+		w.Header().Set("jwt", "JWT_TOKEN_123")
+		w.Header().Set("authorization", token)
+		w.WriteHeader(http.StatusOK)
+	})
+	// Catch-all data endpoint: requires the session token; bare-401s rejectFirst times.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if rejects > 0 {
+			rejects--
+			w.WriteHeader(http.StatusUnauthorized) // no Digest challenge -> triggers re-login
+			return
+		}
+		if r.Header.Get("authorization") != token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	return httptest.NewServer(mux)
+}
+
+func TestControlTracking_EnableViaCGI(t *testing.T) {
+	server := mockEC20CGIDevice(t, "admin", "admin", 0)
+	defer server.Close()
+	socketKey := "admin:admin@" + strings.TrimPrefix(server.URL, "http://")
+
+	got, err := controlTracking(socketKey, "enable", "presenter")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != `"ok"` {
+		t.Errorf("controlTracking enable = %q, want \"ok\"", got)
+	}
+}
+
+func TestControlTracking_DisableViaCGI(t *testing.T) {
+	server := mockEC20CGIDevice(t, "admin", "admin", 0)
+	defer server.Close()
+	socketKey := "admin:admin@" + strings.TrimPrefix(server.URL, "http://")
+
+	got, err := controlTracking(socketKey, "disable", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != `"ok"` {
+		t.Errorf("controlTracking disable = %q, want \"ok\"", got)
+	}
+}
+
+func TestControlTracking_RelogsInOn401(t *testing.T) {
+	server := mockEC20CGIDevice(t, "admin", "admin", 1) // reject the first data hit
+	defer server.Close()
+	socketKey := "admin:admin@" + strings.TrimPrefix(server.URL, "http://")
+
+	got, err := controlTracking(socketKey, "enable", "zone")
+	if err != nil {
+		t.Fatalf("unexpected error (re-login should recover): %v", err)
+	}
+	if got != `"ok"` {
+		t.Errorf("controlTracking after re-login = %q, want \"ok\"", got)
+	}
+}
+
 // TestEC20CGIResponse_KnownVector pins the exact hash formula (raw-int nc, no qop).
 func TestEC20CGIResponse_KnownVector(t *testing.T) {
 	// Hand-computed expectation using the same primitives.

@@ -28,6 +28,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // ec20CGISession holds the app-layer tokens for one device's CGI session.
@@ -135,4 +137,146 @@ func ec20Login(client *http.Client, baseURL, username, password string) (*ec20CG
 		jwt:           resp.Header.Get("jwt"),
 		authorization: resp.Header.Get("authorization"),
 	}, nil
+}
+
+// ---------- session cache + authenticated CGI requests ----------
+
+var (
+	cgiSessionMu sync.Mutex
+	cgiSessions  = map[string]*ec20CGISession{} // keyed by device host[:port]
+)
+
+// cgiSession returns a cached auth.cgi session for host, logging in if absent or
+// force=true (used to refresh after a 401). Safe for concurrent callers.
+func cgiSession(client *http.Client, baseURL, host, username, password string, force bool) (*ec20CGISession, error) {
+	cgiSessionMu.Lock()
+	defer cgiSessionMu.Unlock()
+	if !force {
+		if s, ok := cgiSessions[host]; ok {
+			return s, nil
+		}
+	}
+	s, err := ec20Login(client, baseURL, username, password)
+	if err != nil {
+		return nil, err
+	}
+	cgiSessions[host] = s
+	return s, nil
+}
+
+// ec20CGISendGET issues an authenticated GET to a device CGI path (e.g.
+// "/cgi-bin/ptzctrl.cgi?post_aimode&Off"), attaching the cached auth.cgi session
+// token. On a 401 it re-logs in once and retries (token expiry). CGI uses the
+// device's HTTP port from the socketKey — NOT VISCA's TCP port.
+func ec20CGISendGET(socketKey, path string) ([]byte, error) {
+	host, username, password := parseSocketKey(socketKey)
+	baseURL := "http://" + host
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	sess, err := cgiSession(client, baseURL, host, username, password, false)
+	if err != nil {
+		return nil, err
+	}
+	body, status, err := ec20CGIDo(client, baseURL+path, username, password, sess.authorization)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusUnauthorized {
+		// App-layer token likely expired — re-login once and retry.
+		sess, err = cgiSession(client, baseURL, host, username, password, true)
+		if err != nil {
+			return nil, err
+		}
+		body, status, err = ec20CGIDo(client, baseURL+path, username, password, sess.authorization)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("ec20 CGI GET %s: HTTP %d", path, status)
+	}
+	return body, nil
+}
+
+// ec20CGIDo performs a GET with the app-layer `authorization` token, transparently
+// answering a transport HTTP Digest challenge (lighttpd may guard /cgi-bin/) by
+// reusing the driver's Digest helpers. It returns (body, status, err); a bare 401
+// (no Digest challenge) is returned as status 401 so the caller can re-login.
+func ec20CGIDo(client *http.Client, url, username, password, authToken string) ([]byte, int, error) {
+	newReq := func(withDigest string) (*http.Request, error) {
+		req, e := http.NewRequest(http.MethodGet, url, nil)
+		if e != nil {
+			return nil, e
+		}
+		if authToken != "" {
+			req.Header.Set("authorization", authToken)
+		}
+		if withDigest != "" {
+			req.Header.Set("Authorization", withDigest)
+		}
+		return req, nil
+	}
+
+	req, err := newReq("")
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	// Transport Digest challenge? Answer it and resend (keeping the app token).
+	if resp.StatusCode == http.StatusUnauthorized {
+		challenge := resp.Header.Get("WWW-Authenticate")
+		resp.Body.Close()
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(challenge)), "digest") {
+			u, e := http.NewRequest(http.MethodGet, url, nil)
+			if e != nil {
+				return nil, 0, e
+			}
+			hdr, e := ec20DigestAuthHeader(challenge, http.MethodGet, u.URL.RequestURI(), username, password)
+			if e != nil {
+				return nil, 0, e
+			}
+			req2, e := newReq(hdr)
+			if e != nil {
+				return nil, 0, e
+			}
+			resp, err = client.Do(req2)
+			if err != nil {
+				return nil, 0, err
+			}
+		} else {
+			// Bare 401 = app-layer token expired; let the caller re-login.
+			return nil, http.StatusUnauthorized, nil
+		}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+	return body, resp.StatusCode, nil
+}
+
+// ec20TrackingCommand returns the CGI path for an AI-tracking action.
+//
+// ⚠ CONFIRM ON HARDWARE. The EC20's tracking-toggle command is NOT in public docs.
+// Candidates from reverse-engineering (device web-UI JS + the SMTAV ODM family):
+//
+//	(a) /cgi-bin/ptzctrl.cgi?post_aimode&<Single_Track|Frame_Track|Off>   (SMTAV family)
+//	(b) /cgi-bin/vip?set_ai_vip&vip=<1|0>                                  (this unit's JS)
+//
+// We default to (a), mapping presenter->Single_Track, zone->Frame_Track. This is the
+// ONLY place the wire command is defined — after a live probe, adjust here and nothing
+// else changes. (See .claude/programs/ec20-api-discovery.md.)
+func ec20TrackingCommand(action, mode string) string {
+	if action == "disable" {
+		return "/cgi-bin/ptzctrl.cgi?post_aimode&Off"
+	}
+	aiMode := "Single_Track" // presenter (default)
+	if mode == "zone" {
+		aiMode = "Frame_Track"
+	}
+	return "/cgi-bin/ptzctrl.cgi?post_aimode&" + aiMode
 }

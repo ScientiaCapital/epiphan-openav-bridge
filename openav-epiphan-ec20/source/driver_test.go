@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // mockEC20API creates a test server that simulates EC20 REST API responses.
@@ -271,6 +274,93 @@ func mockEC20API(t *testing.T) *httptest.Server {
 func socketKeyFromServer(server *httptest.Server) string {
 	addr := strings.TrimPrefix(server.URL, "http://")
 	return "admin:testpass@" + addr
+}
+
+// ========== fake VISCA-over-TCP device (motion control plane) ==========
+
+// viscaReplyFor returns the reply frames a fake EC20 sends for a request frame.
+// Commands (81 01 …) get an ACK then a completion; inquiries (81 09 …) get a
+// single data completion whose shape matches the parser the driver runs.
+func viscaReplyFor(frame []byte) [][]byte {
+	if len(frame) >= 4 && frame[1] == 0x09 { // inquiry
+		switch {
+		case frame[2] == 0x06 && frame[3] == 0x12: // pan/tilt inquiry -> pan 0x0052, tilt 0
+			return [][]byte{{0x90, 0x50, 0x00, 0x00, 0x05, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFF}}
+		case frame[2] == 0x04 && frame[3] == 0x47: // zoom inquiry -> 0x1000
+			return [][]byte{{0x90, 0x50, 0x01, 0x00, 0x00, 0x00, 0xFF}}
+		case frame[2] == 0x00 && frame[3] == 0x02: // version inquiry
+			return [][]byte{{0x90, 0x50, 0x00, 0x52, 0xFF}}
+		}
+		return [][]byte{{0x90, 0x50, 0xFF}} // generic completion
+	}
+	return [][]byte{{0x90, 0x41, 0xFF}, {0x90, 0x51, 0xFF}} // ACK + completion
+}
+
+// fakeVISCADeviceWithReply starts a TCP listener that emulates the EC20's raw
+// VISCA plane. It LOOPS accepting connections — controlPTZ and the status/
+// position reads each open TWO connections (one frame apiece) — reads one frame
+// per connection, records it, and writes back reply(frame). It points viscaPort
+// at its ephemeral port and restores it + closes the listener via t.Cleanup.
+// The returned socketKey carries a deliberately-wrong ":80" host port to prove
+// viscaSend ignores it and dials viscaPort instead. frames() returns a
+// thread-safe copy of every request frame the device received.
+func fakeVISCADeviceWithReply(t *testing.T, reply func([]byte) [][]byte) (socketKey string, frames func() [][]byte) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	var mu sync.Mutex
+	var captured [][]byte
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed by cleanup
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+				buf := make([]byte, 64)
+				n, err := c.Read(buf)
+				if n <= 0 || (err != nil && n == 0) {
+					return
+				}
+				frame := append([]byte(nil), buf[:n]...)
+				mu.Lock()
+				captured = append(captured, frame)
+				mu.Unlock()
+				for _, r := range reply(frame) {
+					_, _ = c.Write(r)
+				}
+			}(conn)
+		}
+	}()
+
+	old := viscaPort
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	viscaPort = port
+	t.Cleanup(func() {
+		viscaPort = old
+		ln.Close()
+	})
+
+	frames = func() [][]byte {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([][]byte, len(captured))
+		copy(out, captured)
+		return out
+	}
+	return "admin:x@127.0.0.1:80", frames
+}
+
+// fakeVISCADevice is the common case: a healthy device that ACKs commands and
+// answers inquiries with well-formed data completions.
+func fakeVISCADevice(t *testing.T) (socketKey string, frames func() [][]byte) {
+	return fakeVISCADeviceWithReply(t, viscaReplyFor)
 }
 
 // ========== parseSocketKey tests ==========
@@ -685,127 +775,50 @@ func TestEC20APIGetRaw_NonOKStatus(t *testing.T) {
 // ========== GET function tests ==========
 
 func TestGetCameraStatus_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := getCameraStatus(socketKey)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	var parsed map[string]interface{}
-	err = json.Unmarshal([]byte(result), &parsed)
-	if err != nil {
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 		t.Fatalf("result is not valid JSON: %v", err)
 	}
 
-	if parsed["model"] != "EC20" {
-		t.Errorf("expected model EC20, got %v", parsed["model"])
+	if parsed["online"] != true {
+		t.Errorf("expected online true, got %v", parsed["online"])
 	}
-	if parsed["firmware"] != "1.0.0" {
-		t.Errorf("expected firmware 1.0.0, got %v", parsed["firmware"])
-	}
-}
-
-func TestGetCameraStatus_NoResult(t *testing.T) {
-	// When no "result" key exists, getCameraStatus returns the top-level data
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":   "ok",
-			"model":    "EC20",
-			"firmware": "1.0.0",
-		})
-	}))
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:testpass@" + addr
-
-	result, err := getCameraStatus(socketKey)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var parsed map[string]interface{}
-	err = json.Unmarshal([]byte(result), &parsed)
-	if err != nil {
-		t.Fatalf("result is not valid JSON: %v", err)
-	}
-
-	// Should contain top-level fields since there is no "result" key
-	if parsed["model"] != "EC20" {
-		t.Errorf("expected model EC20, got %v", parsed["model"])
-	}
-}
-
-func TestGetCameraStatus_Unauthorized(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	_, err := getCameraStatus(socketKey)
-	if err == nil {
-		t.Fatal("expected error for bad credentials")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected '401' in error, got: %v", err)
+	if _, ok := parsed["pan_units"]; !ok {
+		t.Errorf("expected a pan_units key in result, got: %s", result)
 	}
 }
 
 func TestGetPTZPosition_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := getPTZPosition(socketKey)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	var parsed map[string]interface{}
-	err = json.Unmarshal([]byte(result), &parsed)
-	if err != nil {
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 		t.Fatalf("result is not valid JSON: %v", err)
 	}
 
-	if parsed["pan"] != 45.0 {
-		t.Errorf("expected pan 45.0, got %v", parsed["pan"])
-	}
-	if parsed["tilt"] != -10.0 {
-		t.Errorf("expected tilt -10.0, got %v", parsed["tilt"])
-	}
-	if parsed["zoom"] != 2.0 {
-		t.Errorf("expected zoom 2.0, got %v", parsed["zoom"])
+	if _, ok := parsed["pan_units"]; !ok {
+		t.Errorf("expected a pan_units key in result, got: %s", result)
 	}
 }
 
 func TestGetPresets_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	result, err := getPresets(socketKey)
+	// VISCA has no list-presets inquiry; getPresets returns a constant, no network.
+	result, err := getPresets("admin:x@127.0.0.1:80")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	var parsed []interface{}
-	err = json.Unmarshal([]byte(result), &parsed)
-	if err != nil {
-		t.Fatalf("result is not valid JSON array: %v", err)
-	}
-
-	if len(parsed) != 2 {
-		t.Fatalf("expected 2 presets, got %d", len(parsed))
-	}
-
-	preset := parsed[0].(map[string]interface{})
-	if preset["name"] != "Center" {
-		t.Errorf("expected first preset name Center, got %v", preset["name"])
+	if !strings.Contains(result, "unsupported") {
+		t.Errorf("expected 'unsupported' in result, got: %s", result)
 	}
 }
 
@@ -843,10 +856,7 @@ func TestGetPreview_Success(t *testing.T) {
 }
 
 func TestHealthCheck_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := healthCheck(socketKey)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -871,10 +881,7 @@ func TestHealthCheck_Failure(t *testing.T) {
 // ========== SET function tests ==========
 
 func TestControlPTZ_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := controlPTZ(socketKey, "45.0", "-10.0", `{"zoom":2.0}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -885,10 +892,7 @@ func TestControlPTZ_Success(t *testing.T) {
 }
 
 func TestControlPTZ_QuotedArgs(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	// Framework passes quoted values; controlPTZ strips quotes
 	result, err := controlPTZ(socketKey, `"45.0"`, `"-10.0"`, `{"zoom":2.0}`)
 	if err != nil {
@@ -899,50 +903,32 @@ func TestControlPTZ_QuotedArgs(t *testing.T) {
 	}
 }
 
+// TestControlPTZ_CustomSpeedIsForwarded proves the caller's speed reaches the
+// wire: it's clamped through clampSpeed to VISCA's per-axis ceilings and carried
+// in the absolute pan-tilt frame's speed bytes (index 4 = pan, index 5 = tilt).
+// Speed 90 clamps to pan 0x18 (24) and tilt 0x14 (20).
 func TestControlPTZ_CustomSpeedIsForwarded(t *testing.T) {
-	var panSpeed, tiltSpeed float64
-	mux := http.NewServeMux()
-	mux.HandleFunc(ec20EndpointPan, func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("pan: failed to decode request body: %v", err)
-			return
-		}
-		speed, ok := body["speed"].(float64)
-		if !ok {
-			t.Errorf("pan: expected numeric 'speed' in body, got %v", body["speed"])
-			return
-		}
-		panSpeed = speed
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-	mux.HandleFunc(ec20EndpointTilt, func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("tilt: failed to decode request body: %v", err)
-			return
-		}
-		speed, ok := body["speed"].(float64)
-		if !ok {
-			t.Errorf("tilt: expected numeric 'speed' in body, got %v", body["speed"])
-			return
-		}
-		tiltSpeed = speed
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-	mux.HandleFunc(ec20EndpointZoom, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
-	})
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, frames := fakeVISCADevice(t)
 	_, err := controlPTZ(socketKey, "45.0", "-10.0", `{"zoom":2.0,"speed":90}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if panSpeed != 90 || tiltSpeed != 90 {
-		t.Errorf("expected speed 90 forwarded to pan+tilt, got pan=%v tilt=%v", panSpeed, tiltSpeed)
+
+	var abs []byte
+	for _, f := range frames() {
+		// absolute pan-tilt frame: 81 01 06 02 <panSpeed> <tiltSpeed> ...
+		if len(f) >= 6 && f[0] == 0x81 && f[1] == 0x01 && f[2] == 0x06 && f[3] == 0x02 {
+			abs = f
+		}
+	}
+	if abs == nil {
+		t.Fatal("no absolute pan/tilt frame (81 01 06 02) captured")
+	}
+	if abs[4] != 0x18 {
+		t.Errorf("pan speed byte = 0x%02X, want 0x18 (clamped from 90)", abs[4])
+	}
+	if abs[5] != 0x14 {
+		t.Errorf("tilt speed byte = 0x%02X, want 0x14 (clamped from 90)", abs[5])
 	}
 }
 
@@ -1002,47 +988,16 @@ func TestControlPTZ_InvalidZoom(t *testing.T) {
 	}
 }
 
-// TestControlPTZ_TiltFailsAfterPanSucceeds covers the partial-failure/mid-sequence path:
-// pan's POST succeeds but tilt's POST fails — controlPTZ must surface the error rather than
-// silently reporting success while the camera is left with only pan actually applied.
-func TestControlPTZ_TiltFailsAfterPanSucceeds(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc(ec20EndpointPan, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+// TestControlPTZ_DeviceError covers the device-error path: the camera answers
+// the pan-tilt command with a VISCA error reply (90 6y FF) instead of a
+// completion. controlPTZ must surface that as an error, not report success.
+func TestControlPTZ_DeviceError(t *testing.T) {
+	socketKey, _ := fakeVISCADeviceWithReply(t, func([]byte) [][]byte {
+		return [][]byte{{0x90, 0x60, 0x02, 0xFF}} // VISCA syntax error
 	})
-	mux.HandleFunc(ec20EndpointTilt, func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	})
-	mux.HandleFunc(ec20EndpointZoom, func(w http.ResponseWriter, r *http.Request) {
-		t.Error("zoom should never be called once tilt has failed")
-	})
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
 	_, err := controlPTZ(socketKey, "45.0", "-10.0", `{"zoom":2.0}`)
 	if err == nil {
-		t.Fatal("expected error when the tilt call fails after pan succeeds")
-	}
-	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("expected HTTP 500 in error, got: %v", err)
-	}
-}
-
-func TestControlPTZ_Unauthorized(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	_, err := controlPTZ(socketKey, "0", "0", `{"zoom":1}`)
-	if err == nil {
-		t.Fatal("expected error for bad credentials")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected '401' in error, got: %v", err)
+		t.Fatal("expected error when the device replies with a VISCA error")
 	}
 }
 
@@ -1081,10 +1036,7 @@ func TestControlPTZ_TiltOutOfRange(t *testing.T) {
 }
 
 func TestControlPTZ_BoundaryValues(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	// Exact documented boundaries must be accepted: pan ±162.5, tilt -30 and +90.
 	cases := []struct{ pan, tilt string }{
 		{"162.5", "90"},
@@ -1102,10 +1054,7 @@ func TestControlPTZ_BoundaryValues(t *testing.T) {
 }
 
 func TestControlPTZHome_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := controlPTZHome(socketKey)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1115,27 +1064,8 @@ func TestControlPTZHome_Success(t *testing.T) {
 	}
 }
 
-func TestControlPTZHome_Unauthorized(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	addr := strings.TrimPrefix(server.URL, "http://")
-	socketKey := "admin:wrongpass@" + addr
-
-	_, err := controlPTZHome(socketKey)
-	if err == nil {
-		t.Fatal("expected error for bad credentials")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("expected '401' in error, got: %v", err)
-	}
-}
-
 func TestRecallPreset_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := recallPreset(socketKey, "1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1146,10 +1076,7 @@ func TestRecallPreset_Success(t *testing.T) {
 }
 
 func TestRecallPreset_QuotedArg(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := recallPreset(socketKey, `"2"`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1160,10 +1087,7 @@ func TestRecallPreset_QuotedArg(t *testing.T) {
 }
 
 func TestSavePreset_Success(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := savePreset(socketKey, "3", "Podium")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1174,10 +1098,7 @@ func TestSavePreset_Success(t *testing.T) {
 }
 
 func TestSavePreset_QuotedArgs(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := savePreset(socketKey, `"3"`, `"Podium"`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1188,10 +1109,10 @@ func TestSavePreset_QuotedArgs(t *testing.T) {
 }
 
 func TestControlTracking_Enable(t *testing.T) {
-	server := mockEC20API(t)
+	// Tracking rides the CGI plane (auth.cgi session + ptzctrl.cgi command).
+	server := mockEC20CGIDevice(t, "admin", "x", 0)
 	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey := "admin:x@" + strings.TrimPrefix(server.URL, "http://")
 	result, err := controlTracking(socketKey, "enable", "presenter")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1202,10 +1123,9 @@ func TestControlTracking_Enable(t *testing.T) {
 }
 
 func TestControlTracking_Disable(t *testing.T) {
-	server := mockEC20API(t)
+	server := mockEC20CGIDevice(t, "admin", "x", 0)
 	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey := "admin:x@" + strings.TrimPrefix(server.URL, "http://")
 	result, err := controlTracking(socketKey, "disable", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1230,10 +1150,9 @@ func TestControlTracking_InvalidAction(t *testing.T) {
 }
 
 func TestControlTracking_QuotedArgs(t *testing.T) {
-	server := mockEC20API(t)
+	server := mockEC20CGIDevice(t, "admin", "x", 0)
 	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey := "admin:x@" + strings.TrimPrefix(server.URL, "http://")
 	result, err := controlTracking(socketKey, `"enable"`, `"presenter"`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1244,11 +1163,11 @@ func TestControlTracking_QuotedArgs(t *testing.T) {
 }
 
 func TestControlTracking_Zone(t *testing.T) {
-	server := mockEC20API(t)
+	// "zone" is a DOC-CONFIRMED tracking mode alongside "presenter"; it validates
+	// cleanly and drives the CGI command (mapped to Frame_Track).
+	server := mockEC20CGIDevice(t, "admin", "x", 0)
 	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	// "zone" is a DOC-CONFIRMED tracking mode alongside "presenter".
+	socketKey := "admin:x@" + strings.TrimPrefix(server.URL, "http://")
 	result, err := controlTracking(socketKey, "enable", "zone")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1259,11 +1178,10 @@ func TestControlTracking_Zone(t *testing.T) {
 }
 
 func TestControlTracking_DefaultsToPresenter(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
 	// An empty mode on enable defaults to presenter (documented default).
+	server := mockEC20CGIDevice(t, "admin", "x", 0)
+	defer server.Close()
+	socketKey := "admin:x@" + strings.TrimPrefix(server.URL, "http://")
 	result, err := controlTracking(socketKey, "enable", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1335,24 +1253,18 @@ func TestMockEC20API_PresetGotoValidatesBody(t *testing.T) {
 // ========== doDeviceSpecificGet routing tests ==========
 
 func TestDoDeviceSpecificGet_Status(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := doDeviceSpecificGet(socketKey, "status", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "EC20") {
-		t.Errorf("expected EC20 in result, got: %s", result)
+	if !strings.Contains(result, "pan_units") {
+		t.Errorf("expected 'pan_units' in result, got: %s", result)
 	}
 }
 
 func TestDoDeviceSpecificGet_Healthcheck(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := doDeviceSpecificGet(socketKey, "healthcheck", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1363,30 +1275,24 @@ func TestDoDeviceSpecificGet_Healthcheck(t *testing.T) {
 }
 
 func TestDoDeviceSpecificGet_PTZPosition(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := doDeviceSpecificGet(socketKey, "ptzposition", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "pan") {
-		t.Errorf("expected 'pan' in result, got: %s", result)
+	if !strings.Contains(result, "pan_units") {
+		t.Errorf("expected 'pan_units' in result, got: %s", result)
 	}
 }
 
 func TestDoDeviceSpecificGet_Presets(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
-	result, err := doDeviceSpecificGet(socketKey, "presets", "", "")
+	// presets routes to getPresets, which returns the no-network unsupported constant.
+	result, err := doDeviceSpecificGet("admin:x@127.0.0.1:80", "presets", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "Center") {
-		t.Errorf("expected 'Center' in result, got: %s", result)
+	if !strings.Contains(result, "unsupported") {
+		t.Errorf("expected 'unsupported' in result, got: %s", result)
 	}
 }
 
@@ -1418,10 +1324,7 @@ func TestDoDeviceSpecificGet_Unknown(t *testing.T) {
 // ========== doDeviceSpecificSet routing tests ==========
 
 func TestDoDeviceSpecificSet_PTZ(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	// PUT /:addr/ptz/:pan/:tilt  body={"zoom":<num>,"speed":<optional int>}
 	result, err := doDeviceSpecificSet(socketKey, "ptz", "45.0", "-10.0", `{"zoom":2.0}`)
 	if err != nil {
@@ -1433,10 +1336,7 @@ func TestDoDeviceSpecificSet_PTZ(t *testing.T) {
 }
 
 func TestDoDeviceSpecificSet_PTZHome(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	result, err := doDeviceSpecificSet(socketKey, "ptzhome", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1447,10 +1347,7 @@ func TestDoDeviceSpecificSet_PTZHome(t *testing.T) {
 }
 
 func TestDoDeviceSpecificSet_Preset(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	// PUT /:addr/preset/:presetId
 	result, err := doDeviceSpecificSet(socketKey, "preset", "1", "", "")
 	if err != nil {
@@ -1462,10 +1359,7 @@ func TestDoDeviceSpecificSet_Preset(t *testing.T) {
 }
 
 func TestDoDeviceSpecificSet_PresetSave(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	socketKey, _ := fakeVISCADevice(t)
 	// PUT /:addr/presetsave/:presetId  body=name
 	result, err := doDeviceSpecificSet(socketKey, "presetsave", "3", "Podium", "")
 	if err != nil {
@@ -1477,11 +1371,11 @@ func TestDoDeviceSpecificSet_PresetSave(t *testing.T) {
 }
 
 func TestDoDeviceSpecificSet_Tracking(t *testing.T) {
-	server := mockEC20API(t)
-	defer server.Close()
-
-	socketKey := socketKeyFromServer(server)
+	// tracking routes to controlTracking, which drives the CGI plane.
 	// PUT /:addr/tracking/:action  body=mode
+	server := mockEC20CGIDevice(t, "admin", "x", 0)
+	defer server.Close()
+	socketKey := "admin:x@" + strings.TrimPrefix(server.URL, "http://")
 	result, err := doDeviceSpecificSet(socketKey, "tracking", "enable", "presenter", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

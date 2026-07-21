@@ -35,12 +35,12 @@ const (
 	ec20EndpointTilt        = "/api/ptz/tilt"         // PLACEHOLDER - POST {degrees, speed}
 	ec20EndpointZoom        = "/api/ptz/zoom"         // PLACEHOLDER - POST {level}
 	ec20EndpointHome        = "/api/ptz/home"         // PLACEHOLDER - POST (no body)
-	ec20EndpointPresets     = "/api/ptz/presets"       // PLACEHOLDER - GET preset list
+	ec20EndpointPresets     = "/api/ptz/presets"      // PLACEHOLDER - GET preset list
 	ec20EndpointPresetGoto  = "/api/ptz/preset/goto"  // PLACEHOLDER - POST {preset_id}
 	ec20EndpointPresetSave  = "/api/ptz/preset/save"  // PLACEHOLDER - POST {preset_id, name}
 	ec20EndpointTrackingOn  = "/api/tracking/enable"  // PLACEHOLDER - POST {mode}
 	ec20EndpointTrackingOff = "/api/tracking/disable" // PLACEHOLDER - POST (no body)
-	ec20EndpointPreview     = "/api/preview"           // PLACEHOLDER - GET (returns JPEG binary)
+	ec20EndpointPreview     = "/api/preview"          // PLACEHOLDER - GET (returns JPEG binary)
 )
 
 // parseSocketKey extracts host, username, and password from the framework socketKey.
@@ -395,19 +395,59 @@ func fetchResultOrRaw(socketKey, function, fieldLabel, endpoint string) (string,
 	return string(jsonBytes), nil
 }
 
+// readPTZUnits queries pan/tilt and zoom via VISCA inquiries, returning RAW VISCA
+// units (degrees require the Story-D calibration; until then we surface units so
+// the data stays honest).
+func readPTZUnits(socketKey string) (pan, tilt int16, zoom uint16, err error) {
+	ptReply, err := viscaSend(socketKey, viscaPanTiltInquiry())
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if pan, tilt, err = parsePanTiltReply(ptReply); err != nil {
+		return 0, 0, 0, err
+	}
+	zReply, err := viscaSend(socketKey, viscaZoomInquiry())
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if zoom, err = parseZoomReply(zReply); err != nil {
+		return 0, 0, 0, err
+	}
+	return pan, tilt, zoom, nil
+}
+
 func getCameraStatus(socketKey string) (string, error) {
-	framework.Log("getCameraStatus - called for: " + socketKey)
-	return fetchResultOrRaw(socketKey, "getCameraStatus", "status", ec20EndpointStatus)
+	function := "getCameraStatus"
+	framework.Log(function + " - called for: " + socketKey)
+	pan, tilt, zoom, err := readPTZUnits(socketKey)
+	if err != nil {
+		framework.AddToErrors(socketKey, function+" - "+err.Error())
+		return "", err
+	}
+	out, _ := json.Marshal(map[string]interface{}{
+		"online": true, "pan_units": pan, "tilt_units": tilt, "zoom_units": zoom,
+	})
+	return string(out), nil
 }
 
 func getPTZPosition(socketKey string) (string, error) {
-	framework.Log("getPTZPosition - called for: " + socketKey)
-	return fetchResultOrRaw(socketKey, "getPTZPosition", "position", ec20EndpointPosition)
+	function := "getPTZPosition"
+	framework.Log(function + " - called for: " + socketKey)
+	pan, tilt, zoom, err := readPTZUnits(socketKey)
+	if err != nil {
+		framework.AddToErrors(socketKey, function+" - "+err.Error())
+		return "", err
+	}
+	out, _ := json.Marshal(map[string]interface{}{
+		"pan_units": pan, "tilt_units": tilt, "zoom_units": zoom,
+	})
+	return string(out), nil
 }
 
 func getPresets(socketKey string) (string, error) {
 	framework.Log("getPresets - called for: " + socketKey)
-	return fetchResultOrRaw(socketKey, "getPresets", "presets", ec20EndpointPresets)
+	// VISCA has no "list presets" inquiry; presets are addressed by slot (recall/set).
+	return `"unsupported: VISCA has no list-presets inquiry; recall/set by slot 0-255"`, nil
 }
 
 func getPreview(socketKey string) (string, error) {
@@ -431,8 +471,8 @@ func getPreview(socketKey string) (string, error) {
 }
 
 func healthCheck(socketKey string) (string, error) {
-	_, err := ec20APIGet(socketKey, ec20EndpointStatus)
-	if err != nil {
+	// A VISCA version inquiry is the cheapest liveness probe on the control plane.
+	if _, err := viscaSend(socketKey, viscaVersionInquiry()); err != nil {
 		return `"false"`, nil
 	}
 	return `"true"`, nil
@@ -445,6 +485,67 @@ func healthCheck(socketKey string) (string, error) {
 type ptzBody struct {
 	Zoom  *float64 `json:"zoom"`
 	Speed *int     `json:"speed"`
+}
+
+// ---------- degrees/zoom -> VISCA-unit calibration ----------
+//
+// The MCP contract speaks degrees (pan ±162.5°, tilt -30..90°) and a zoom level;
+// VISCA absolute-position frames speak raw signed 16-bit units. These constants
+// map between them.
+//
+// !!! CALIBRATE ON HARDWARE (Live Room v1, Story D) !!!  The scales below are
+// PLACEHOLDERS derived from one live data point (a 0.6s pan jog @ speed 6 read
+// back as ~0x0052 units) and the documented pan/tilt ranges — NOT yet confirmed
+// against absolute-position moves. Drive to known references, read the position
+// inquiry, and set these to the measured units-per-degree before trusting
+// absolute positioning. Values are isolated here so calibration is a one-line tune.
+const (
+	panUnitsPerDegree  = 14.0 // PLACEHOLDER — measure on hardware (Story D)
+	tiltUnitsPerDegree = 14.0 // PLACEHOLDER — measure on hardware (Story D)
+	// Zoom level range: the EC20 zoom-direct value is a 16-bit position
+	// (0x0000 wide .. 0x4000 tele observed). The contract's zoom is passed as a
+	// raw VISCA zoom position, clamped to this range. (NEEDS-PROBE for the exact
+	// tele maximum; 0x4000 is the Sony convention.)
+	zoomMax = 0x4000
+	// defaultPTZSpeed feeds the VISCA absolute-move pan/tilt speed bytes when the
+	// caller omits speed (matches the prior REST default of 50, clamped to VISCA's
+	// documented pan-speed ceiling).
+	viscaPanSpeedMax  = 0x18 // 24
+	viscaTiltSpeedMax = 0x14 // 20
+)
+
+// degreesToUnits converts a degree value to a signed 16-bit VISCA position,
+// clamped to the int16 range so a bad scale can never wrap the frame.
+func degreesToUnits(deg, unitsPerDegree float64) int16 {
+	v := deg * unitsPerDegree
+	if v > 32767 {
+		v = 32767
+	} else if v < -32768 {
+		v = -32768
+	}
+	return int16(v)
+}
+
+// clampSpeed maps a caller PTZ speed onto VISCA's per-axis speed bytes.
+func clampSpeed(speed, max int) byte {
+	if speed < 1 {
+		speed = 1
+	}
+	if speed > max {
+		speed = max
+	}
+	return byte(speed)
+}
+
+// zoomToUnits clamps a contract zoom level to the VISCA 16-bit zoom range.
+func zoomToUnits(zoom float64) uint16 {
+	if zoom < 0 {
+		zoom = 0
+	}
+	if zoom > zoomMax {
+		zoom = zoomMax
+	}
+	return uint16(zoom)
 }
 
 func controlPTZ(socketKey string, panStr string, tiltStr string, bodyStr string) (string, error) {
@@ -503,29 +604,20 @@ func controlPTZ(socketKey string, panStr string, tiltStr string, bodyStr string)
 		return "", errors.New(errMsg)
 	}
 
-	// Pan
-	_, err = ec20APIPostJSON(socketKey, ec20EndpointPan, map[string]interface{}{
-		"degrees": pan,
-		"speed":   speed,
-	})
-	if err != nil {
+	// Absolute pan+tilt is a single VISCA frame (81 01 06 02 ...). Convert the
+	// validated degrees to VISCA units via the Story-D calibration constants.
+	panSpeed := clampSpeed(speed, viscaPanSpeedMax)
+	tiltSpeed := clampSpeed(speed, viscaTiltSpeedMax)
+	panUnits := degreesToUnits(pan, panUnitsPerDegree)
+	tiltUnits := degreesToUnits(tilt, tiltUnitsPerDegree)
+	if _, err := viscaSend(socketKey, viscaPanTiltAbsolute(panSpeed, tiltSpeed, panUnits, tiltUnits)); err != nil {
+		framework.AddToErrors(socketKey, function+" - pan/tilt: "+err.Error())
 		return "", err
 	}
 
-	// Tilt
-	_, err = ec20APIPostJSON(socketKey, ec20EndpointTilt, map[string]interface{}{
-		"degrees": tilt,
-		"speed":   speed,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	// Zoom
-	_, err = ec20APIPostJSON(socketKey, ec20EndpointZoom, map[string]interface{}{
-		"level": zoom,
-	})
-	if err != nil {
+	// Zoom is a separate VISCA frame (81 01 04 47 ...).
+	if _, err := viscaSend(socketKey, viscaZoomDirect(zoomToUnits(zoom))); err != nil {
+		framework.AddToErrors(socketKey, function+" - zoom: "+err.Error())
 		return "", err
 	}
 
@@ -536,8 +628,8 @@ func controlPTZHome(socketKey string) (string, error) {
 	function := "controlPTZHome"
 	framework.Log(function + " - called for: " + socketKey)
 
-	err := ec20APIPost(socketKey, ec20EndpointHome)
-	if err != nil {
+	if _, err := viscaSend(socketKey, viscaHome()); err != nil {
+		framework.AddToErrors(socketKey, function+" - "+err.Error())
 		return "", err
 	}
 
@@ -555,11 +647,10 @@ func recallPreset(socketKey string, presetID string) (string, error) {
 		framework.AddToErrors(socketKey, errMsg)
 		return "", errors.New(errMsg)
 	}
+	id, _ := strconv.Atoi(presetID) // safe: validatePresetID confirmed 0-255
 
-	_, err := ec20APIPostJSON(socketKey, ec20EndpointPresetGoto, map[string]interface{}{
-		"preset_id": presetID,
-	})
-	if err != nil {
+	if _, err := viscaSend(socketKey, viscaPresetRecall(id)); err != nil {
+		framework.AddToErrors(socketKey, function+" - "+err.Error())
 		return "", err
 	}
 
@@ -584,12 +675,12 @@ func savePreset(socketKey string, presetID string, name string) (string, error) 
 		framework.AddToErrors(socketKey, errMsg)
 		return "", errors.New(errMsg)
 	}
+	id, _ := strconv.Atoi(presetID) // safe: validatePresetID confirmed 0-255
 
-	_, err := ec20APIPostJSON(socketKey, ec20EndpointPresetSave, map[string]interface{}{
-		"preset_id": presetID,
-		"name":      name,
-	})
-	if err != nil {
+	// VISCA "store preset" carries only the slot number — the name is not sent to
+	// the camera (it's validated above for API compatibility and future use).
+	if _, err := viscaSend(socketKey, viscaPresetSet(id)); err != nil {
+		framework.AddToErrors(socketKey, function+" - "+err.Error())
 		return "", err
 	}
 
@@ -617,16 +708,16 @@ func controlTracking(socketKey string, action string, mode string) (string, erro
 			framework.AddToErrors(socketKey, errMsg)
 			return "", errors.New(errMsg)
 		}
-		_, err := ec20APIPostJSON(socketKey, ec20EndpointTrackingOn, map[string]interface{}{
-			"mode": mode,
-		})
-		if err != nil {
+		// AI tracking is not part of standard VISCA — it rides the device's CGI
+		// surface (auth.cgi session + ptzctrl.cgi command; see cgiauth.go).
+		if _, err := ec20CGISendGET(socketKey, ec20TrackingCommand("enable", mode)); err != nil {
+			framework.AddToErrors(socketKey, function+" - "+err.Error())
 			return "", err
 		}
 		return `"ok"`, nil
 	case "disable":
-		err := ec20APIPost(socketKey, ec20EndpointTrackingOff)
-		if err != nil {
+		if _, err := ec20CGISendGET(socketKey, ec20TrackingCommand("disable", "")); err != nil {
+			framework.AddToErrors(socketKey, function+" - "+err.Error())
 			return "", err
 		}
 		return `"ok"`, nil
