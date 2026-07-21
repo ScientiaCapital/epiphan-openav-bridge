@@ -1,49 +1,88 @@
 # Observer: Architecture Report
 
-**Date:** 2026-03-21
+**Date:** 2026-07-21 (sprint review appended; baseline below from 2026-03-21)
 **Project:** epiphan-openav-bridge
-**Observer Model:** Claude Opus 4.6 (DA audit) + Sonnet (sweep)
-**Session:** Initial baseline activation
+**Observer Model:** observer-full (DA)
+**Session:** `feat/ec20-hybrid-driver` merge review
 
 ---
 
-## Blockers (stop work immediately)
+## Sprint architecture review — EC20 hybrid driver (2026-07-21)
 
-_No blockers. Codebase is architecturally sound._
+The EC20 driver moved from a single unverified REST layer to a **hybrid two-plane** model, which is
+the right call and matches the real device:
 
----
+- **VISCA over TCP :5678** (visca.go) — pan/tilt/zoom/home/preset/jog + position inquiries.
+  Framing is hardware-verified (fw 3.3.40) and cleanly separated: pure frame builders + nibble
+  codecs + one transport func, each unit-tested against a real TCP fake. Good.
+- **CGI auth.cgi session** (cgiauth.go) — AI tracking only. Correctly isolated from VISCA.
 
-## Risks (address this sprint)
+### Blockers
+_No architectural blockers._ The dead REST placeholder layer (the "single largest technical risk"
+from the 2026-03-21 baseline, RISK on the 12 placeholder endpoint paths) is now **removed** — that
+risk is retired. The `ec20APIPostJSON` / `ec20APIGetRaw` helpers dispositioned in the baseline DA
+table below are gone with it.
 
-[RISK] — openav-epiphan-ec20/source/driver.go:19-34 — All 12 EC20 API endpoints are PLACEHOLDER paths — The EC20 REST API has no public documentation. Driver structure is correct but endpoint paths cannot be validated without real hardware. This is the single largest technical risk in the project.
+### Risks (address before/with hardware bring-up)
+[RISK] **CGI app-auth layering is unproven end-to-end.** Three coupled assumptions ride the one
+untested `ec20CGIDo` transport-Digest branch: (a) app token goes in a header Go will title-case,
+(b) `jwt` is not required on data calls, (c) the app token survives a co-occurring Digest challenge
+(it does not — header collision, see QUALITY.md). If the real EC20 Digest-guards /cgi-bin/, tracking
+breaks. Treat the CGI plane as CONFIRM-ON-HARDWARE, not done.
 
-[RISK] — openav-epiphan-pearl/source/driver.go:18 & openav-epiphan-ec20/source/driver.go:39 — `parseSocketKey()` duplicated across both drivers — Currently acceptable per OpenAV self-contained driver convention. Becomes a real risk if a third driver is added or if the parsing logic needs to change (would require coordinated updates in two places).
+[RISK] **Degree↔VISCA-unit calibration is a placeholder in the shipped path.** Absolute PTZ speaks
+degrees at the contract boundary but converts with an unmeasured scale, returning success on wrong
+moves. Architecturally the constants are well-isolated (one-line tune), but the *default* is
+uncalibrated-but-succeeds. Consider making calibration explicit state rather than a silent constant.
 
----
+[RISK] **Non-atomic multi-frame commands.** `controlPTZ` opens two TCP connections (pan/tilt, then
+zoom); jog/preset each open their own. No transaction — a mid-sequence failure leaves the camera
+partially moved. Acceptable for PTZ, worth noting for the record.
 
-## Smells (log to backlog)
+### Smells
+[SMELL] Global `cgiSessionMu` held across network I/O serializes logins for a service designed to
+front many devices (see QUALITY.md). Per-host locking would fit the stateless multi-device design.
 
-[RESOLVED 2026-07-17] — License inconsistency — root `README.md:142-143` now states the dual-license correctly (root=MIT, microservices=GPL-3.0); both microservice READMEs state GPL-3.0. No inconsistency remains.
+### Cross-layer contract (Go driver ↔ openav-mcp client.py) — invariant audit
+| Invariant | Go driver | client.py | Aligned? |
+|-----------|-----------|-----------|----------|
+| pan range | ±162.5° | ±162.5° | ✅ |
+| tilt range | -30..90° | -30..90° | ✅ |
+| preset id | 0-255 | 0-255 | ✅ |
+| preset name | ≤64 chars | ≤64 chars | ✅ |
+| ptz speed | >0 then clamp 1-24/tilt20 | >0 | ✅ (Go clamps) |
+| jog direction set | 9 tokens incl. stop | same frozenset | ✅ |
+| jog speed | clamp 1-24 (tilt 20) | enforce 1-24 | ⚠ minor (tilt 21-24 clamps silently) |
+| tracking mode | reject ∉{presenter,zone} | **not validated** | ⚠ drift (server schema covers MCP path only) |
+| zoom | raw 16-bit position 0..0x4000 | unbounded `number`, undocumented | ⚠ semantics undocumented |
 
-[RESOLVED 2026-07-17] — curl test scripts — `pearl_curl_tests.sh` and `ec20_curl_tests.sh` now exist. (Also added: `ec20_probe.sh`, a non-destructive REST endpoint discovery harness.)
+Verdict: the pan/tilt/preset/name invariants — the ones flagged historically as drift-prone — are
+correctly mirrored in BOTH layers and validated in mock + live (parity fix held). Residual drift is
+tracking-mode validation and zoom semantics (both logged as smells).
 
-[RESOLVED 2026-07-18] — ROADMAP.md — Phase 1 completion status unclear despite proof script existing — Checked ROADMAP.md directly: Phase 1's checkbox is genuinely unchecked, which is consistent with root README.md's own "In Progress" status for RTSP Proof (not a tracking bug — both docs agree Phase 1 isn't done yet).
-
----
-
-## Contract Compliance
-
+### Contract Compliance
 | Contract | Status | Notes |
 |----------|--------|-------|
-| No feature contract active | N/A | `.claude/contracts/` is empty — contracts created on-demand by `/build` |
+| No feature contract active | N/A | `.claude/contracts/` empty — created on-demand by `/build` |
 
 ---
 
-## Devil's Advocate Challenges
+## Baseline (2026-03-21) — retained for history
 
+### Blockers
+_No blockers. Codebase is architecturally sound._
+
+### Risks (baseline)
+[RETIRED 2026-07-21] EC20 12-endpoint REST placeholder paths — REST layer removed; replaced by
+hardware-verified VISCA + CGI planes.
+
+[ACCEPTED] `parseSocketKey()` duplicated across both drivers — self-contained single-binary per
+OpenAV convention; becomes a real risk only if a 3rd driver is added. Confirmed with Tim 2026-07-18.
+
+### Devil's Advocate Challenges (baseline)
 | File | Challenge | Verdict |
 |------|-----------|---------|
-| `parseSocketKey()` (both drivers) | Should this be a shared utility package? | **Acceptable tradeoff** — OpenAV convention is self-contained drivers. Framework itself has a similar parser but uses SSH/Sony auth patterns. Custom per-driver is correct for now. |
-| `ec20APIPostJSON()` (EC20 only) | Is this needed? Pearl uses `pearlAPIPost()` without JSON body. | **Justified** — EC20 PTZ commands require JSON request bodies (pan/tilt/zoom parameters). Pearl recording commands use URL path-based control. Different devices, different APIs. |
-| `ec20APIGetRaw()` (EC20 only) | Is this needed? Could reuse `ec20APIGet()`. | **Justified** — Preview endpoint returns raw JPEG bytes, not JSON. Needs separate handler to avoid JSON parsing failure. |
-| Docker `rm -f go.mod go.sum` step | Why delete before `go mod init`? | **Required** — Framework submodule's `.gitignore` excludes `go.mod`/`go.sum`, but `docker COPY` includes all files. Without deletion, `go mod init` fails on existing `go.mod`. |
+| `parseSocketKey()` (both drivers) | Shared utility package? | Acceptable — OpenAV self-contained convention. |
+| `ec20APIPostJSON()` | Needed? | **Moot 2026-07-21** — removed with REST layer. |
+| `ec20APIGetRaw()` | Needed? | **Moot 2026-07-21** — removed with REST layer. |
+| Docker `rm -f go.mod go.sum` | Why delete before init? | Required — framework submodule gitignores go.mod. |
