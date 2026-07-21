@@ -208,11 +208,16 @@ func ec20CGIDo(client *http.Client, url, username, password, authToken string) (
 		if e != nil {
 			return nil, e
 		}
+		// Assign the raw header-map keys directly rather than Header.Set: Set
+		// canonicalizes "authorization" to "Authorization", which (a) drops the
+		// literal lowercase name the EC20 web UI uses for the app token and (b)
+		// would collide with / overwrite the transport Digest "Authorization".
+		// Raw assignment keeps them as two distinct wire header lines.
 		if authToken != "" {
-			req.Header.Set("authorization", authToken)
+			req.Header["authorization"] = []string{authToken} // app-layer session token (lowercase, web-UI form)
 		}
 		if withDigest != "" {
-			req.Header.Set("Authorization", withDigest)
+			req.Header["Authorization"] = []string{withDigest} // transport HTTP Digest
 		}
 		return req, nil
 	}

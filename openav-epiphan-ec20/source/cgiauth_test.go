@@ -56,6 +56,49 @@ func mockEC20AuthCGI(t *testing.T, username, password string) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
+// TestEC20CGIDo_DigestBranchPreservesAppToken guards the header-collision bug:
+// on a transport-Digest retry the app-layer `authorization` token must STILL be
+// sent (Header.Set would canonicalize + overwrite it). First hit (no Digest) →
+// 401 challenge; retry must carry BOTH the Digest Authorization and the app token.
+func TestEC20CGIDo_DigestBranchPreservesAppToken(t *testing.T) {
+	const token = "APP_TOKEN_XYZ"
+	sawTokenWithDigest := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		hasDigest, hasToken := false, false
+		for _, v := range r.Header.Values("Authorization") {
+			if strings.HasPrefix(v, "Digest ") {
+				hasDigest = true
+			}
+			if v == token {
+				hasToken = true
+			}
+		}
+		if !hasDigest { // first attempt → issue a transport Digest challenge
+			w.Header().Set("WWW-Authenticate", `Digest realm="EC20", nonce="abc123", qop="auth", algorithm=MD5`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if hasToken {
+			sawTokenWithDigest = true
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, status, err := ec20CGIDo(&http.Client{}, server.URL+"/cgi-bin/param.cgi?x", "admin", "pass", token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want 200", status)
+	}
+	if !sawTokenWithDigest {
+		t.Error("app-layer authorization token was dropped on the Digest retry")
+	}
+}
+
 func TestEC20Login_Success(t *testing.T) {
 	server := mockEC20AuthCGI(t, "admin", "admin")
 	defer server.Close()
