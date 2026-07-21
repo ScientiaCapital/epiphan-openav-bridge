@@ -89,6 +89,46 @@ class TestDeviceLayer:
             await c.ec20_preset_recall("room-320b-cam", 256)
 
     @pytest.mark.asyncio
+    async def test_ec20_jog(self) -> None:
+        c = _client()
+        out = await c.ec20_jog("room-320b-cam", "up", speed=8)
+        assert out["direction"] == "up"
+        assert out["speed"] == 8
+        assert out["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_ec20_jog_invalid_direction_errors(self) -> None:
+        c = _client()
+        with pytest.raises(ValueError):
+            await c.ec20_jog("room-320b-cam", "sideways")
+
+    @pytest.mark.asyncio
+    async def test_ec20_jog_speed_out_of_range_errors(self) -> None:
+        c = _client()
+        with pytest.raises(ValueError):
+            await c.ec20_jog("room-320b-cam", "left", speed=99)
+
+    @pytest.mark.asyncio
+    async def test_ec20_preset_save(self) -> None:
+        c = _client()
+        out = await c.ec20_preset_save("room-320b-cam", 3, name="Podium")
+        assert out["preset_id"] == 3
+        assert out["name"] == "Podium"
+        assert out["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_ec20_preset_save_out_of_range_errors(self) -> None:
+        c = _client()
+        with pytest.raises(ValueError):
+            await c.ec20_preset_save("room-320b-cam", 300)
+
+    @pytest.mark.asyncio
+    async def test_ec20_preset_save_name_too_long_errors(self) -> None:
+        c = _client()
+        with pytest.raises(ValueError):
+            await c.ec20_preset_save("room-320b-cam", 1, name="x" * 65)
+
+    @pytest.mark.asyncio
     async def test_unknown_device_errors(self) -> None:
         c = _client()
         with pytest.raises(KeyError):
@@ -226,7 +266,8 @@ class TestMCPServer:
         # scene layer
         assert {"set_room_state", "run_scene", "list_room_controls"} <= names
         # device layer
-        assert {"pearl_control_recording", "pearl_status", "ec20_ptz", "ec20_tracking"} <= names
+        assert {"pearl_control_recording", "pearl_status", "ec20_ptz", "ec20_tracking",
+            "ec20_jog", "ec20_preset_recall", "ec20_preset_save"} <= names
 
     def test_readonly_tools_annotated(self) -> None:
         specs = {t.name: t for t in list_tool_specs(mutating_enabled=True)}

@@ -17,7 +17,7 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from openav_mcp.client import DeviceRequestError, OpenAVClient
+from openav_mcp.client import EC20_JOG_DIRECTIONS, DeviceRequestError, OpenAVClient
 from openav_mcp.config import load_config_from_env
 
 _DEVICE = {"device": {"type": "string", "description": "Device alias from config"}}
@@ -57,19 +57,33 @@ _SPECS: list[_Spec] = [
     _Spec("pearl_status", "Get a Pearl encoder's recording status.",
           _schema({**_DEVICE}, ["device"]), True, "pearl_status"),
     # -- device layer: EC20 --
-    _Spec("ec20_ptz", "Move an EC20 PTZ camera (pan, tilt, zoom, optional move speed).",
-          _schema({**_DEVICE, "pan": {"type": "number"}, "tilt": {"type": "number"},
-                   "zoom": {"type": "number"},
-                   "speed": {"type": "integer", "default": 50,
-                              "description": "PTZ move speed, no documented range — must be positive"}},
-                  ["device", "pan", "tilt", "zoom"]), False, "ec20_ptz"),
+    # Preferred framing verbs are presets + tracking + jog; ec20_ptz (absolute
+    # degrees) is secondary — the degree→VISCA-unit mapping is calibrated best-effort.
+    _Spec("ec20_jog", "Nudge an EC20 camera in a direction (VISCA drive; 'stop' halts). Preferred for live framing.",
+          _schema({**_DEVICE,
+                   "direction": {"type": "string", "enum": sorted(EC20_JOG_DIRECTIONS)},
+                   "speed": {"type": "integer", "default": 10, "minimum": 1, "maximum": 24,
+                              "description": "pan speed 1-24 (tilt internally capped at 20)"}},
+                  ["device", "direction"]), False, "ec20_jog"),
+    _Spec("ec20_preset_recall", "Recall an EC20 PTZ preset (0-255) — the primary way to frame known shots.",
+          _schema({**_DEVICE, "preset_id": {"type": "integer", "minimum": 0, "maximum": 255}},
+                  ["device", "preset_id"]), False, "ec20_preset_recall"),
+    _Spec("ec20_preset_save", "Save the current EC20 PTZ position to a preset slot (0-255).",
+          _schema({**_DEVICE, "preset_id": {"type": "integer", "minimum": 0, "maximum": 255},
+                   "name": {"type": "string", "description": "optional label, <=64 chars"}},
+                  ["device", "preset_id"]), False, "ec20_preset_save"),
     _Spec("ec20_tracking", "Enable/disable EC20 AI presenter tracking.",
           _schema({**_DEVICE, "action": {"type": "string", "enum": ["enable", "disable"]},
-                   "mode": {"type": "string", "default": "presenter"}},
+                   "mode": {"type": "string", "enum": ["presenter", "zone"], "default": "presenter"}},
                   ["device", "action"]), False, "ec20_tracking"),
-    _Spec("ec20_preset_recall", "Recall an EC20 PTZ preset (0-255).",
-          _schema({**_DEVICE, "preset_id": {"type": "integer"}}, ["device", "preset_id"]),
-          False, "ec20_preset_recall"),
+    _Spec("ec20_ptz", "Move an EC20 to an absolute pan/tilt/zoom (degrees; secondary — prefer ec20_jog / ec20_preset_recall).",
+          _schema({**_DEVICE,
+                   "pan": {"type": "number", "minimum": -162.5, "maximum": 162.5},
+                   "tilt": {"type": "number", "minimum": -30, "maximum": 90},
+                   "zoom": {"type": "number"},
+                   "speed": {"type": "integer", "default": 50,
+                              "description": "PTZ move speed (positive; clamped to VISCA 1-24)"}},
+                  ["device", "pan", "tilt", "zoom"]), False, "ec20_ptz"),
     _Spec("ec20_status", "Get an EC20 camera's status (incl. tracking).",
           _schema({**_DEVICE}, ["device"]), True, "ec20_status"),
 ]

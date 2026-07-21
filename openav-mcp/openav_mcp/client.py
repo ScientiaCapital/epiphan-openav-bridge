@@ -12,8 +12,15 @@ resolved from config internally and never returned to callers.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from openav_mcp.config import DeviceKind, OpenAVConfig
+
+# Valid EC20 jog directions — must match jogDirection() in
+# openav-epiphan-ec20/source/driver.go. "stop" halts VISCA continuous drive.
+EC20_JOG_DIRECTIONS = frozenset(
+    {"up", "down", "left", "right", "upleft", "upright", "downleft", "downright", "stop"}
+)
 
 # Named multi-step scenes for run_scene(). Each step = (control_set, control, value).
 SCENE_RECIPES: dict[str, list[tuple[str, str, Any]]] = {
@@ -201,6 +208,36 @@ class OpenAVClient:
         if not self.config.mock:
             await self._device_put(self.config.ec20_service_url, device, f"preset/{preset_id}", "")
         return {"device": device, "preset_id": preset_id, "ok": True}
+
+    async def ec20_preset_save(self, device: str, preset_id: int, name: str = "") -> dict[str, Any]:
+        # Store the current PTZ position to a preset slot. Range/length kept in sync
+        # with savePreset()/validatePresetID in openav-epiphan-ec20/source/driver.go.
+        if not 0 <= preset_id <= 255:
+            raise ValueError("preset_id must be 0-255")
+        if len(name) > 64:
+            raise ValueError("preset name must be <= 64 characters")
+        self._require_kind(device, "ec20")
+        if not self.config.mock:
+            path = f"presetsave/{preset_id}/{quote(name, safe='')}"
+            await self._device_put(self.config.ec20_service_url, device, path, "")
+        else:
+            self._mock_devices.setdefault(device, {})["preset_save"] = [preset_id, name]
+        return {"device": device, "preset_id": preset_id, "name": name, "ok": True}
+
+    async def ec20_jog(self, device: str, direction: str, speed: int = 10) -> dict[str, Any]:
+        # Nudge the camera via VISCA pan-tilt drive (continuous motion until "stop").
+        # direction set + speed range mirror jogDirection()/clampSpeed in driver.go
+        # (VISCA pan speed 1-24; tilt is internally capped at 20).
+        if direction not in EC20_JOG_DIRECTIONS:
+            raise ValueError(f"direction must be one of {sorted(EC20_JOG_DIRECTIONS)}")
+        if not 1 <= speed <= 24:
+            raise ValueError("speed must be 1-24")
+        self._require_kind(device, "ec20")
+        if not self.config.mock:
+            await self._device_put(self.config.ec20_service_url, device, f"jog/{direction}/{speed}", "")
+        else:
+            self._mock_devices.setdefault(device, {})["jog"] = [direction, speed]
+        return {"device": device, "direction": direction, "speed": speed, "ok": True}
 
     async def ec20_status(self, device: str) -> dict[str, Any]:
         self._require_kind(device, "ec20")
