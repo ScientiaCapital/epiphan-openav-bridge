@@ -24,7 +24,7 @@ response and won't match the mock's synthetic values.
   The model only ever sees friendly aliases like 'room-320b-cam'.
 ```
 
-The agent discovered **10 tools**: `ec20_preset_recall`, `ec20_ptz`, `ec20_status`, `ec20_tracking`, `list_room_controls`, `pearl_control_recording`, `pearl_singletouch`, `pearl_status`, `run_scene`, `set_room_state`.
+The agent discovered **12 tools**: `ec20_jog`, `ec20_preset_recall`, `ec20_preset_save`, `ec20_ptz`, `ec20_status`, `ec20_tracking`, `list_room_controls`, `pearl_control_recording`, `pearl_singletouch`, `pearl_status`, `run_scene`, `set_room_state`.
 
 ## The scenario
 
@@ -33,7 +33,7 @@ presenter."* Here is every MCP call it makes, in order:
 
 | # | Agent intent | MCP tool | Args | Result |
 |---|---|---|---|---|
-| 1 | Agent asks the MCP server what it can control. | `list_tools` | — | `10 tools (3 read-only, 7 mutating)` |
+| 1 | Agent asks the MCP server what it can control. | `list_tools` | — | `12 tools (3 read-only, 9 mutating)` |
 | 2 | What scenes and controls does Room 320B expose? | `list_room_controls` | `{"system":"smart-room-demo"}` | `{"system":"smart-room-demo","scenes":["record_session","stop_session"],"control_sets":{"recording":["record","streaming"],"camera":["tracking","ptz_home"]}}` |
 | 3 | Is the camera online, is it tracking? | `ec20_status` | `{"device":"room-320b-cam"}` | `{"device":"room-320b-cam","ok":true,"status":{"tracking":"disabled","state":"online"}}` |
 | 4 | Is the encoder online, is it recording? | `pearl_status` | `{"device":"room-320b-pearl"}` | `{"device":"room-320b-pearl","ok":true,"status":{"recording":"stopped","state":"online"}}` |
