@@ -1,6 +1,6 @@
 # epiphan-openav-bridge
 
-**Branch**: main | **Updated**: 2026-07-21 (EC20 hybrid-driver sprint shipped)
+**Branch**: main | **Updated**: 2026-07-22 (sprint shipped; team set up for hardware sprint)
 
 ## Status
 Go microservices bridging Dartmouth **OpenAV** ↔ Epiphan **Pearl + EC20**, plus the **`openav-mcp`**
@@ -39,9 +39,9 @@ Positioning: OpenAV = brains, Epiphan = reliable hardware, agent = backbone ("Ep
   VISCA (`:5678`) is unaffected.
 
 ## Start here
-**`HANDOFF.md`** — verified no-hardware smoke test (`openav-mcp/scripts/roundtrip_demo.py`) + go-live.
-For live deployment: **`demo/DEPLOY-RPI5.md`**. The agent that drives this lives in the sibling repo
-**`silkroute`** (its `README.md` "Agentic AV control plane").
+**New teammate?** → **`ONBOARDING.md`** (2-min orientation + repo map + gotchas). **Picking up the work?**
+→ **`HANDOFF.md`** (full detail + the "Next Sprint" runbook). **Deploying?** → **`demo/DEPLOY-RPI5.md`**.
+The agent that drives this lives in the sibling repo **`silkroute`** ("Agentic AV control plane").
 
 ## Tech Stack
 Go 1.25 (Echo microservices, GPL-3.0; EC20 = raw VISCA-over-TCP + CGI) | Python 3.11+ (`openav-mcp`:
