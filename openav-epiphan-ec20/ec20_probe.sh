@@ -4,7 +4,7 @@
 #
 # Purpose: the 12 REST endpoint paths in source/driver.go are PLACEHOLDER values because
 # the EC20's REST API paths are not published in Epiphan's public docs (see
-# .claude/programs/ec20-api-discovery.md). This script operationalizes that discovery
+# docs/ec20-protocol-notes.md). This script operationalizes that discovery
 # program so confirming the real paths on hardware is a ~30-minute job, not a research
 # project.
 #
@@ -18,7 +18,7 @@
 # non-destructive.
 #
 # Usage:
-#   EC20_HOST=192.168.1.88 EC20_USERNAME=admin EC20_PASSWORD=secret bash ec20_probe.sh
+#   EC20_HOST=192.0.2.88 EC20_USERNAME=admin EC20_PASSWORD=secret bash ec20_probe.sh
 #
 # Env:
 #   EC20_HOST            (required) camera IP/hostname — NO hardcoded creds in this file
@@ -39,7 +39,7 @@ DRY_RUN="${EC20_DRY_RUN:-0}"
 
 if [[ -z "$HOST" && "$DRY_RUN" != "1" ]]; then
   echo "ERROR: EC20_HOST is required."
-  echo "Usage: EC20_HOST=192.168.x.x EC20_USERNAME=admin EC20_PASSWORD=... bash ec20_probe.sh"
+  echo "Usage: EC20_HOST=192.0.2.x EC20_USERNAME=admin EC20_PASSWORD=... bash ec20_probe.sh"
   echo "       (or EC20_DRY_RUN=1 bash ec20_probe.sh to preview without hardware)"
   exit 1
 fi
@@ -104,7 +104,7 @@ if [[ "$DRY_RUN" != "skip" ]]; then
   probe "API-index (first move)" "/api/" "/api/v1/" "/swagger.json" "/openapi.json" "/api/docs"
 fi
 
-# ---- The 12 endpoints (candidates mirror .claude/programs/ec20-api-discovery.md) ----
+# ---- The 12 endpoints (candidates mirror docs/ec20-protocol-notes.md) ----
 if [[ "$DRY_RUN" != "skip" ]]; then
   probe "ec20EndpointStatus"      "/api/status" "/api/v1/status" "/status" "/api/device/status" "/api/info" "/api/system/status" "/cgi-bin/status"
   probe "ec20EndpointPosition"    "/api/ptz/position" "/api/v1/ptz/position" "/ptz/position" "/api/ptz/query" "/api/ptz/status" "/cgi-bin/ptz.cgi?action=getStatus"

@@ -6,7 +6,7 @@ package main
 // surface has its OWN session layer: a custom challenge/response against
 // /cgi-bin/auth.cgi that grants a token carried in the `authorization` request
 // header on every subsequent CGI call. Reverse-engineered from the device web
-// UI (build-new.min.js). See .claude/programs/ec20-api-discovery.md Appendix A.
+// UI (build-new.min.js). See docs/ec20-protocol-notes.md Appendix A.
 //
 // Handshake (all GET /cgi-bin/auth.cgi):
 //  1. No `authenticate` header -> 401 with a CUSTOM challenge header:
@@ -21,6 +21,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -90,7 +91,7 @@ func ec20Cnonce32() (string, error) {
 }
 
 // ec20Login performs the auth.cgi handshake against baseURL and returns the session.
-// baseURL is the scheme+host (e.g. "http://192.168.8.11"), no trailing path.
+// baseURL is the scheme+host (e.g. "http://192.0.2.11"), no trailing path.
 func ec20Login(client *http.Client, baseURL, username, password string) (*ec20CGISession, error) {
 	url := strings.TrimRight(baseURL, "/") + "/cgi-bin/auth.cgi"
 
@@ -141,37 +142,96 @@ func ec20Login(client *http.Client, baseURL, username, password string) (*ec20CG
 
 // ---------- session cache + authenticated CGI requests ----------
 
-var (
-	cgiSessionMu sync.Mutex
-	cgiSessions  = map[string]*ec20CGISession{} // keyed by device host[:port]
+const (
+	// cgiSessionTTL bounds how long a cached auth.cgi token is reused before a
+	// fresh login, independent of whether the device has expired it yet.
+	cgiSessionTTL = 10 * time.Minute
+	// cgiSessionMaxEntries bounds the cache so a stream of distinct
+	// host/credential combinations cannot grow it without limit.
+	cgiSessionMaxEntries = 64
 )
 
-// cgiSession returns a cached auth.cgi session for host, logging in if absent or
-// force=true (used to refresh after a 401). Safe for concurrent callers.
+type cgiCacheEntry struct {
+	sess    *ec20CGISession
+	expires time.Time
+}
+
+var (
+	cgiSessionMu sync.Mutex
+	cgiSessions  = map[string]cgiCacheEntry{} // keyed by cgiCacheKey(host, user, pass)
+	cgiNow       = time.Now                   // test seam for TTL expiry
+)
+
+// cgiCacheKey binds a cached session to the device host AND the credentials that
+// obtained it, so a caller presenting different credentials for the same host can
+// never reuse another caller's token. The credentials are folded in as a SHA-256
+// digest of "user:password"; the plaintext is never used as a map key.
+func cgiCacheKey(host, username, password string) string {
+	sum := sha256.Sum256([]byte(username + ":" + password))
+	return host + "|" + hex.EncodeToString(sum[:])
+}
+
+// dropCGISession removes a cached session (e.g. after the device rejected it).
+func dropCGISession(key string) {
+	cgiSessionMu.Lock()
+	delete(cgiSessions, key)
+	cgiSessionMu.Unlock()
+}
+
+// evictCGISessionsLocked makes room for one new entry: it first drops expired
+// entries, then, if the cache is still full, the entry closest to expiry.
+// Caller holds cgiSessionMu.
+func evictCGISessionsLocked(now time.Time) {
+	for k, e := range cgiSessions {
+		if !now.Before(e.expires) {
+			delete(cgiSessions, k)
+		}
+	}
+	for len(cgiSessions) >= cgiSessionMaxEntries {
+		var oldestKey string
+		var oldest time.Time
+		for k, e := range cgiSessions {
+			if oldestKey == "" || e.expires.Before(oldest) {
+				oldestKey, oldest = k, e.expires
+			}
+		}
+		delete(cgiSessions, oldestKey)
+	}
+}
+
+// cgiSession returns a cached, unexpired auth.cgi session for (host, username,
+// password), logging in if absent, expired, or force=true (used to refresh after
+// a 401). A failed login leaves no entry behind. Safe for concurrent callers.
 func cgiSession(client *http.Client, baseURL, host, username, password string, force bool) (*ec20CGISession, error) {
+	key := cgiCacheKey(host, username, password)
 	cgiSessionMu.Lock()
 	defer cgiSessionMu.Unlock()
-	if !force {
-		if s, ok := cgiSessions[host]; ok {
-			return s, nil
+	now := cgiNow()
+	if e, ok := cgiSessions[key]; ok {
+		if !force && now.Before(e.expires) {
+			return e.sess, nil
 		}
+		delete(cgiSessions, key)
 	}
 	s, err := ec20Login(client, baseURL, username, password)
 	if err != nil {
 		return nil, err
 	}
-	cgiSessions[host] = s
+	evictCGISessionsLocked(now)
+	cgiSessions[key] = cgiCacheEntry{sess: s, expires: now.Add(cgiSessionTTL)}
 	return s, nil
 }
 
 // ec20CGISendGET issues an authenticated GET to a device CGI path (e.g.
 // "/cgi-bin/ptzctrl.cgi?post_aimode&Off"), attaching the cached auth.cgi session
-// token. On a 401 it re-logs in once and retries (token expiry). CGI uses the
-// device's HTTP port from the socketKey — NOT VISCA's TCP port.
+// token for these exact credentials. On a 401 it drops the cached entry, re-logs
+// in once and retries (token expiry); a second 401 drops the new entry too and
+// fails. CGI uses the device's HTTP port from the socketKey — NOT VISCA's TCP port.
 func ec20CGISendGET(socketKey, path string) ([]byte, error) {
 	host, username, password := parseSocketKey(socketKey)
 	baseURL := "http://" + host
 	client := &http.Client{Timeout: 10 * time.Second}
+	key := cgiCacheKey(host, username, password)
 
 	sess, err := cgiSession(client, baseURL, host, username, password, false)
 	if err != nil {
@@ -182,7 +242,8 @@ func ec20CGISendGET(socketKey, path string) ([]byte, error) {
 		return nil, err
 	}
 	if status == http.StatusUnauthorized {
-		// App-layer token likely expired — re-login once and retry.
+		// App-layer token rejected (likely expired) — drop it, re-login once, retry.
+		dropCGISession(key)
 		sess, err = cgiSession(client, baseURL, host, username, password, true)
 		if err != nil {
 			return nil, err
@@ -190,6 +251,9 @@ func ec20CGISendGET(socketKey, path string) ([]byte, error) {
 		body, status, err = ec20CGIDo(client, baseURL+path, username, password, sess.authorization)
 		if err != nil {
 			return nil, err
+		}
+		if status == http.StatusUnauthorized {
+			dropCGISession(key)
 		}
 	}
 	if status != http.StatusOK {
@@ -274,7 +338,7 @@ func ec20CGIDo(client *http.Client, url, username, password, authToken string) (
 //
 // We default to (a), mapping presenter->Single_Track, zone->Frame_Track. This is the
 // ONLY place the wire command is defined — after a live probe, adjust here and nothing
-// else changes. (See .claude/programs/ec20-api-discovery.md.)
+// else changes. (See docs/ec20-protocol-notes.md.)
 func ec20TrackingCommand(action, mode string) string {
 	if action == "disable" {
 		return "/cgi-bin/ptzctrl.cgi?post_aimode&Off"

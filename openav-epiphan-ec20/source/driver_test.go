@@ -101,9 +101,9 @@ func fakeVISCADevice(t *testing.T) (socketKey string, frames func() [][]byte) {
 // ========== parseSocketKey tests ==========
 
 func TestParseSocketKey_WithCredentials(t *testing.T) {
-	host, user, pass := parseSocketKey("admin:secret@192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("admin:secret@192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "admin" {
 		t.Errorf("expected user admin, got %s", user)
@@ -114,9 +114,9 @@ func TestParseSocketKey_WithCredentials(t *testing.T) {
 }
 
 func TestParseSocketKey_WithProtocolPrefix(t *testing.T) {
-	host, user, pass := parseSocketKey("tcp|admin:secret@192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("tcp|admin:secret@192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "admin" {
 		t.Errorf("expected user admin, got %s", user)
@@ -127,9 +127,9 @@ func TestParseSocketKey_WithProtocolPrefix(t *testing.T) {
 }
 
 func TestParseSocketKey_NoCredentials(t *testing.T) {
-	host, user, pass := parseSocketKey("192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "" {
 		t.Errorf("expected empty user, got %s", user)
@@ -140,9 +140,9 @@ func TestParseSocketKey_NoCredentials(t *testing.T) {
 }
 
 func TestParseSocketKey_PasswordWithColon(t *testing.T) {
-	host, user, pass := parseSocketKey("admin:pass:word@192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("admin:pass:word@192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "admin" {
 		t.Errorf("expected user admin, got %s", user)
@@ -877,5 +877,27 @@ func TestEC20DigestAuthHeader(t *testing.T) {
 	want := md5hex(strings.Join([]string{ha1, nonce, p["nc"], p["cnonce"], "auth", ha2}, ":"))
 	if p["response"] != want {
 		t.Errorf("response = %q, want %q", p["response"], want)
+	}
+}
+
+// TestControlPTZ_RejectsNaNAndInf: NaN slips past every range comparison and
+// would be converted to an undefined int16, so non-finite values must be refused
+// before the range checks and before anything reaches the camera.
+func TestControlPTZ_RejectsNaNAndInf(t *testing.T) {
+	for _, tc := range []struct{ pan, tilt string }{
+		{"NaN", "0"}, {"0", "NaN"}, {"Inf", "0"}, {"0", "-Inf"}, {"+Inf", "0"}, {"0", "infinity"},
+	} {
+		socketKey, frames := fakeVISCADevice(t)
+		_, err := controlPTZ(socketKey, tc.pan, tc.tilt, `{"zoom":1}`)
+		if err == nil {
+			t.Errorf("pan=%s tilt=%s: expected error", tc.pan, tc.tilt)
+			continue
+		}
+		if !strings.Contains(err.Error(), "finite") {
+			t.Errorf("pan=%s tilt=%s: error %q should say the value must be finite", tc.pan, tc.tilt, err)
+		}
+		if n := len(frames()); n != 0 {
+			t.Errorf("pan=%s tilt=%s: %d VISCA frames sent, want 0", tc.pan, tc.tilt, n)
+		}
 	}
 }

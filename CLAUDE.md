@@ -78,11 +78,11 @@ When encountering these situations, follow the specified protocol:
 - **When observer finds [WARNING]:** Log to backlog with owner and ETA, then continue.
 - **After >5 files modified:** Consider upgrading from observer-lite to observer-full.
 
-### EC20 API Endpoints
-- **All 12 EC20 endpoint paths are PLACEHOLDER** — see `.claude/programs/ec20-api-discovery.md`
-- **When EC20 hardware is available:** Run the discovery program before writing new EC20 features.
-- **When probing an endpoint:** One probe at a time, log result to discovery log, 30s timeout per probe.
-- **Metric:** HTTP 200 = confirmed, 4xx = discard, update `driver.go` constant when confirmed.
+### EC20 control planes
+- PTZ, presets, home, jog and position use raw VISCA over TCP 5678 (`source/visca.go`), verified on an EC20
+  running firmware 3.3.40. AI tracking and status use the CGI session layer (`source/cgiauth.go`).
+- Protocol details and the evidence behind them are in `docs/ec20-protocol-notes.md`. Before adding an EC20
+  feature, confirm the command on a bench camera and record the result there.
 
 ### Phase Completion
 - **When a Phase is complete:** Update ROADMAP.md, archive observer report to `.claude/archive/`, run observer-full as final gate.

@@ -25,12 +25,18 @@ def _config(*, mock: bool = True) -> OpenAVConfig:
         ec20_service_url="http://ec20-svc:80",
         devices={
             "room-320b-pearl": DeviceConfig(
-                alias="room-320b-pearl", host="pearl-host", username="admin",
-                password="s3cret", kind="pearl",
+                alias="room-320b-pearl",
+                host="pearl-host",
+                username="admin",
+                password="s3cret",
+                kind="pearl",
             ),
             "room-320b-cam": DeviceConfig(
-                alias="room-320b-cam", host="ec20-host", username="admin",
-                password="s3cret", kind="ec20",
+                alias="room-320b-cam",
+                host="ec20-host",
+                username="admin",
+                password="s3cret",
+                kind="ec20",
             ),
         },
         mock=mock,
@@ -205,18 +211,14 @@ class TestConfigLoading:
             load_config_from_env()
 
     def test_missing_required_field_raises_clean_error(self, monkeypatch) -> None:
-        monkeypatch.setenv(
-            "OPENAV_DEVICES", '[{"host": "1.2.3.4", "password": "s3cret"}]'
-        )
+        monkeypatch.setenv("OPENAV_DEVICES", '[{"host": "1.2.3.4", "password": "s3cret"}]')
         with pytest.raises(ValueError) as exc_info:
             load_config_from_env()
         message = str(exc_info.value)
         assert "missing required field 'alias'" in message
         assert "s3cret" not in message  # never echo values, only field names
 
-    @pytest.mark.parametrize(
-        "raw", ['{"alias": "x"}', "5", '"just a string"', "null"]
-    )
+    @pytest.mark.parametrize("raw", ['{"alias": "x"}', "5", '"just a string"', "null"])
     def test_non_list_top_level_raises_clean_error(self, monkeypatch, raw) -> None:
         # Valid JSON, but not a list — used to crash with an uncaught
         # AttributeError/TypeError instead of a clean config error.
@@ -244,7 +246,7 @@ class TestCredentialSafety:
     def test_resolved_address_has_creds_but_is_internal(self) -> None:
         c = _client()
         addr = c._resolve_address("room-320b-pearl")  # internal only
-        assert addr == "admin:s3cret@pearl-host"
+        assert addr == "admin:s3cret@pearl-host"  # no special chars -> unchanged
 
     @pytest.mark.asyncio
     async def test_device_http_error_never_leaks_credentials(self) -> None:
@@ -259,6 +261,57 @@ class TestCredentialSafety:
         assert "s3cret" not in message
         assert "pearl-host" not in message
 
+    @pytest.mark.asyncio
+    async def test_special_char_credentials_are_percent_encoded(self) -> None:
+        # A password with '/', '#', ':' and '@' must stay inside the single :address
+        # path segment: unencoded, '/' adds path segments, '#' truncates the URL into a
+        # fragment, and an extra ':'/'@' makes the framework drop the credentials.
+        password = "p/s#s:w@rd"
+        cfg = _config(mock=False)
+        cfg.devices["room-320b-cam"].username = "ad/m:n"
+        cfg.devices["room-320b-cam"].password = password
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, text='"ok"')
+
+        c = OpenAVClient(cfg)
+        c._transport = httpx.MockTransport(handler)
+        await c.ec20_tracking("room-320b-cam", "enable")
+        await c.ec20_status("room-320b-cam")
+
+        assert len(seen) == 2
+        for req in seen:
+            raw_path = req.url.raw_path.decode()
+            assert raw_path.startswith("/ad%2Fm%3An:p%2Fs%23s%3Aw%40rd@ec20-host/")
+            assert req.url.fragment == ""
+            assert password not in str(req.url)
+        assert seen[0].url.raw_path.decode().count("/") == 3  # /<address>/tracking/enable
+
+    def test_address_percent_encodes_credentials_only(self) -> None:
+        d = DeviceConfig(
+            alias="a", host="192.0.2.10:80", username="u@x", password="a/b#c:d@e", kind="pearl"
+        )
+        assert d.address == "u%40x:a%2Fb%23c%3Ad%40e@192.0.2.10:80"
+
+    @pytest.mark.asyncio
+    async def test_invalid_url_maps_to_credential_safe_error(self) -> None:
+        # httpx.InvalidURL is NOT an httpx.HTTPError subclass, and its message embeds
+        # the URL (and so user:pass). It must surface as DeviceRequestError instead.
+        cfg = _config(mock=False)
+        cfg.devices["room-320b-pearl"].host = "pearl-host\x7f"  # non-printable -> InvalidURL
+        cfg.devices["room-320b-pearl"].password = "p/s#s:w@rd"
+        c = OpenAVClient(cfg)
+        c._transport = httpx.MockTransport(lambda request: httpx.Response(200))
+        with pytest.raises(DeviceRequestError) as exc_info:
+            await c.pearl_status("room-320b-pearl")
+        message = str(exc_info.value)
+        assert "InvalidURL" in message
+        for secret in ("p/s#s:w@rd", "p%2Fs%23s%3Aw%40rd", "s3cret", "pearl-host"):
+            assert secret not in message
+        assert exc_info.value.__cause__ is None and exc_info.value.__suppress_context__
+
 
 class TestMCPServer:
     def test_tool_catalog_has_both_layers(self) -> None:
@@ -266,8 +319,15 @@ class TestMCPServer:
         # scene layer
         assert {"set_room_state", "run_scene", "list_room_controls"} <= names
         # device layer
-        assert {"pearl_control_recording", "pearl_status", "ec20_ptz", "ec20_tracking",
-            "ec20_jog", "ec20_preset_recall", "ec20_preset_save"} <= names
+        assert {
+            "pearl_control_recording",
+            "pearl_status",
+            "ec20_ptz",
+            "ec20_tracking",
+            "ec20_jog",
+            "ec20_preset_recall",
+            "ec20_preset_save",
+        } <= names
 
     def test_readonly_tools_annotated(self) -> None:
         specs = {t.name: t for t in list_tool_specs(mutating_enabled=True)}

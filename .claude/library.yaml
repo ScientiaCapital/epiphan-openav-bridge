@@ -24,7 +24,7 @@ skills:
     source: local://openav-epiphan-ec20/source/driver.go
     notes: >
       12 placeholder endpoints (lines 23-34). No public API docs exist.
-      See .claude/programs/ec20-api-discovery.md for discovery program.
+      See docs/ec20-protocol-notes.md for discovery program.
 
   - name: openav-sony-reference
     description: Sony FPD driver — reference implementation for OpenAV patterns
@@ -65,5 +65,5 @@ references:
 programs:
   - name: ec20-api-discovery
     description: Autoresearch-style program for discovering EC20 REST API endpoints
-    source: .claude/programs/ec20-api-discovery.md
+    source: docs/ec20-protocol-notes.md
     metric: HTTP 200 response (confirmed) vs 4xx (discard)

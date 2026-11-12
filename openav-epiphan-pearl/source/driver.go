@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -24,14 +25,26 @@ func parseSocketKey(socketKey string) (host string, username string, password st
 		creds := parts[0]
 		if strings.Contains(creds, ":") {
 			credParts := strings.SplitN(creds, ":", 2)
-			username = credParts[0]
-			password = credParts[1]
+			username = pathUnescapeOrRaw(credParts[0])
+			password = pathUnescapeOrRaw(credParts[1])
 		}
 	} else {
 		host = key
 	}
 
 	return
+}
+
+// pathUnescapeOrRaw percent-decodes a socketKey credential. openav-mcp encodes the
+// username/password in the URL path; the framework's echo router passes the
+// :address param through still-encoded whenever the request needed a RawPath
+// (e.g. %2F, %40, %3A in it), and already-decoded otherwise. A value that is not a
+// valid escape sequence (e.g. a literal "50%off") is returned unchanged.
+func pathUnescapeOrRaw(s string) string {
+	if u, err := url.PathUnescape(s); err == nil {
+		return u
+	}
+	return s
 }
 
 // validChannelIDPattern matches validateChannelID's allowed charset. Compiled once at package
@@ -161,7 +174,7 @@ func pearlAPIPost(socketKey string, endpoint string) error {
 
 func getDeviceStatus(socketKey string) (string, error) {
 	function := "getDeviceStatus"
-	framework.Log(function + " - called for: " + socketKey)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey))
 
 	deviceData, err := pearlAPIGet(socketKey, "/device")
 	if err != nil {
@@ -215,17 +228,17 @@ func fetchResultField(socketKey, function, endpoint string) (string, error) {
 }
 
 func getRecordingStatus(socketKey string) (string, error) {
-	framework.Log("getRecordingStatus - called for: " + socketKey)
+	framework.Log("getRecordingStatus - called for: " + redactSocketKey(socketKey))
 	return fetchResultField(socketKey, "getRecordingStatus", "/recorders/status")
 }
 
 func getStorages(socketKey string) (string, error) {
-	framework.Log("getStorages - called for: " + socketKey)
+	framework.Log("getStorages - called for: " + redactSocketKey(socketKey))
 	return fetchResultField(socketKey, "getStorages", "/storages")
 }
 
 func getChannels(socketKey string) (string, error) {
-	framework.Log("getChannels - called for: " + socketKey)
+	framework.Log("getChannels - called for: " + redactSocketKey(socketKey))
 	return fetchResultField(socketKey, "getChannels", "/channels")
 }
 
@@ -241,7 +254,7 @@ func healthCheck(socketKey string) (string, error) {
 
 func controlRecording(socketKey string, action string) (string, error) {
 	function := "controlRecording"
-	framework.Log(function + " - called for: " + socketKey + " action: " + action)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey) + " action: " + action)
 
 	action = strings.Trim(action, `"`)
 
@@ -269,7 +282,7 @@ func controlRecording(socketKey string, action string) (string, error) {
 
 func controlStreaming(socketKey string, channelID string, action string) (string, error) {
 	function := "controlStreaming"
-	framework.Log(function + " - called for: " + socketKey + " channel: " + channelID + " action: " + action)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey) + " channel: " + channelID + " action: " + action)
 
 	action = strings.Trim(action, `"`)
 	channelID = strings.Trim(channelID, `"`)
@@ -302,7 +315,7 @@ func controlStreaming(socketKey string, channelID string, action string) (string
 
 func controlSingleTouch(socketKey string, action string) (string, error) {
 	function := "controlSingleTouch"
-	framework.Log(function + " - called for: " + socketKey + " action: " + action)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey) + " action: " + action)
 
 	action = strings.Trim(action, `"`)
 

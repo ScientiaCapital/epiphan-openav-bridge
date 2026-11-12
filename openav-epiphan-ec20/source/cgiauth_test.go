@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // parseAuthenticateHeaderTest parses the client's authenticate header
@@ -242,5 +245,176 @@ func TestEC20CGIResponse_KnownVector(t *testing.T) {
 	got := ec20CGIResponse("admin", "EC20", "secret", "nonceX", "cnonceY", 1)
 	if got != want {
 		t.Errorf("ec20CGIResponse = %q, want %q", got, want)
+	}
+}
+
+// ---------- session cache: credential binding, TTL, size bound, 401 recovery ----------
+
+// countingCGIDevice is a mock EC20 whose auth.cgi issues a fresh token per login
+// (token-1, token-2, ...) and counts logins. The data endpoint accepts only the
+// most recently issued token, or none at all when alwaysReject is set.
+type countingCGIDevice struct {
+	*httptest.Server
+	logins       atomic.Int32
+	alwaysReject atomic.Bool
+}
+
+func newCountingCGIDevice(t *testing.T, username, password string) *countingCGIDevice {
+	t.Helper()
+	const realm, nonce = "EC20", "srv-nonce"
+	challenge := base64.StdEncoding.EncodeToString([]byte(realm)) + "." +
+		base64.StdEncoding.EncodeToString([]byte(nonce)) + "." +
+		base64.StdEncoding.EncodeToString([]byte("auth"))
+	d := &countingCGIDevice{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cgi-bin/auth.cgi", func(w http.ResponseWriter, r *http.Request) {
+		authz := r.Header.Get("authenticate")
+		if authz == "" {
+			w.Header().Set("WWW-Authenticate", challenge)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		p := parseAuthenticateHeaderTest(authz)
+		ha1 := md5hex(username + ":" + realm + ":" + password)
+		ha2 := md5hex("GET:" + p["uri"])
+		expected := md5hex(strings.Join([]string{ha1, p["nonce"], p["nc"], p["cnonce"], ha2}, ":"))
+		if p["username"] != username || p["response"] != expected {
+			w.WriteHeader(201) // bad credentials
+			return
+		}
+		n := d.logins.Add(1)
+		w.Header().Set("authorization", fmt.Sprintf("token-%d", n))
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if d.alwaysReject.Load() || r.Header.Get("authorization") != fmt.Sprintf("token-%d", d.logins.Load()) {
+			w.WriteHeader(http.StatusUnauthorized) // bare 401: app-layer token rejected
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	d.Server = httptest.NewServer(mux)
+	t.Cleanup(d.Close)
+	return d
+}
+
+func (d *countingCGIDevice) key(user, pass string) string {
+	return user + ":" + pass + "@" + strings.TrimPrefix(d.URL, "http://")
+}
+
+// TestCGISession_WrongPasswordDoesNotReuseToken is the auth-bypass regression: a
+// valid login must not let a later caller with a different password ride on the
+// cached token for the same host.
+func TestCGISession_WrongPasswordDoesNotReuseToken(t *testing.T) {
+	d := newCountingCGIDevice(t, "admin", "goodpass")
+	if _, err := ec20CGISendGET(d.key("admin", "goodpass"), "/cgi-bin/x.cgi"); err != nil {
+		t.Fatalf("login with good credentials: %v", err)
+	}
+	if _, err := ec20CGISendGET(d.key("admin", "WRONG"), "/cgi-bin/x.cgi"); err == nil {
+		t.Fatal("request with a wrong password succeeded by reusing another caller's session token")
+	}
+	if _, err := ec20CGISendGET(d.key("intruder", "goodpass"), "/cgi-bin/x.cgi"); err == nil {
+		t.Fatal("request with a different username succeeded by reusing another caller's session token")
+	}
+}
+
+// TestCGISession_ReusesTokenForSameCredentials: the cache still does its job.
+func TestCGISession_ReusesTokenForSameCredentials(t *testing.T) {
+	d := newCountingCGIDevice(t, "admin", "goodpass")
+	for i := 0; i < 3; i++ {
+		if _, err := ec20CGISendGET(d.key("admin", "goodpass"), "/cgi-bin/x.cgi"); err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+	if n := d.logins.Load(); n != 1 {
+		t.Errorf("logins = %d, want 1 (token should be cached)", n)
+	}
+}
+
+// TestCGICacheKey_NoPlaintextAndCredentialBound: the cache key binds host and
+// credentials but never contains the password itself.
+func TestCGICacheKey_NoPlaintextAndCredentialBound(t *testing.T) {
+	k := cgiCacheKey("192.0.2.11:80", "admin", "Sup3rS3cret")
+	if strings.Contains(k, "Sup3rS3cret") {
+		t.Errorf("cache key contains the plaintext password: %q", k)
+	}
+	if k == cgiCacheKey("192.0.2.11:80", "admin", "other") {
+		t.Error("different passwords map to the same cache key")
+	}
+	if k == cgiCacheKey("192.0.2.12:80", "admin", "Sup3rS3cret") {
+		t.Error("different hosts map to the same cache key")
+	}
+	if k == cgiCacheKey("192.0.2.11:80", "root", "Sup3rS3cret") {
+		t.Error("different usernames map to the same cache key")
+	}
+}
+
+// TestCGISession_ExpiresAfterTTL: an entry older than cgiSessionTTL is not reused.
+func TestCGISession_ExpiresAfterTTL(t *testing.T) {
+	d := newCountingCGIDevice(t, "admin", "goodpass")
+	now := time.Now()
+	oldNow := cgiNow
+	cgiNow = func() time.Time { return now }
+	t.Cleanup(func() { cgiNow = oldNow })
+
+	if _, err := ec20CGISendGET(d.key("admin", "goodpass"), "/cgi-bin/x.cgi"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(cgiSessionTTL - time.Second)
+	if _, err := ec20CGISendGET(d.key("admin", "goodpass"), "/cgi-bin/x.cgi"); err != nil {
+		t.Fatal(err)
+	}
+	if n := d.logins.Load(); n != 1 {
+		t.Fatalf("logins before TTL = %d, want 1", n)
+	}
+	now = now.Add(2 * time.Second)
+	if _, err := ec20CGISendGET(d.key("admin", "goodpass"), "/cgi-bin/x.cgi"); err != nil {
+		t.Fatal(err)
+	}
+	if n := d.logins.Load(); n != 2 {
+		t.Errorf("logins after TTL = %d, want 2 (expired entry must trigger a fresh login)", n)
+	}
+}
+
+// TestCGISession_CacheIsBounded: the cache never grows past cgiSessionMaxEntries.
+func TestCGISession_CacheIsBounded(t *testing.T) {
+	d := newCountingCGIDevice(t, "admin", "goodpass")
+	client := &http.Client{Timeout: 5 * time.Second}
+	host := strings.TrimPrefix(d.URL, "http://")
+	for i := 0; i < cgiSessionMaxEntries+10; i++ {
+		// Distinct cache keys (fake host labels) that all log in against the mock.
+		if _, err := cgiSession(client, d.URL, fmt.Sprintf("%s#%d", host, i), "admin", "goodpass", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cgiSessionMu.Lock()
+	n := len(cgiSessions)
+	cgiSessionMu.Unlock()
+	if n > cgiSessionMaxEntries {
+		t.Errorf("cache holds %d entries, want <= %d", n, cgiSessionMaxEntries)
+	}
+}
+
+// TestCGISession_Persistent401DropsEntry: on a 401 the cached token is dropped and
+// exactly one re-login is attempted; if that also fails nothing stale is kept.
+func TestCGISession_Persistent401DropsEntry(t *testing.T) {
+	d := newCountingCGIDevice(t, "admin", "goodpass")
+	key := d.key("admin", "goodpass")
+	if _, err := ec20CGISendGET(key, "/cgi-bin/x.cgi"); err != nil {
+		t.Fatal(err)
+	}
+	d.alwaysReject.Store(true)
+	if _, err := ec20CGISendGET(key, "/cgi-bin/x.cgi"); err == nil {
+		t.Fatal("expected an error when the device keeps returning 401")
+	}
+	if n := d.logins.Load(); n != 2 {
+		t.Errorf("logins = %d, want 2 (one initial + exactly one re-login)", n)
+	}
+	host, user, pass := parseSocketKey(key)
+	cgiSessionMu.Lock()
+	_, cached := cgiSessions[cgiCacheKey(host, user, pass)]
+	cgiSessionMu.Unlock()
+	if cached {
+		t.Error("rejected session is still cached after a persistent 401")
 	}
 }

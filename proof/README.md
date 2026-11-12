@@ -24,16 +24,16 @@ No Python package dependencies — the script uses only the standard library.
 
 ```bash
 # Probe EC20 streams (no recording)
-python rtsp_test.py --ec20-ip 192.168.1.50 --probe-only
+python rtsp_test.py --ec20-ip 192.0.2.50 --probe-only
 
 # Probe Pearl streams (no recording)
-python rtsp_test.py --pearl-ip 192.168.1.100 --probe-only
+python rtsp_test.py --pearl-ip 192.0.2.100 --probe-only
 
 # Full test: probe + record 30s clips from both devices
-python rtsp_test.py --ec20-ip 192.168.1.50 --pearl-ip 192.168.1.100
+python rtsp_test.py --ec20-ip 192.0.2.50 --pearl-ip 192.0.2.100
 
 # Custom duration and JSON output
-python rtsp_test.py --ec20-ip 192.168.1.50 --duration 60 --json
+python rtsp_test.py --ec20-ip 192.0.2.50 --duration 60 --json
 ```
 
 ## Output

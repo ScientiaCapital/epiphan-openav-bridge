@@ -10,6 +10,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Literal
+from urllib.parse import quote
 
 DeviceKind = Literal["pearl", "ec20"]
 
@@ -27,8 +28,14 @@ class DeviceConfig:
     @property
     def address(self) -> str:
         """The OpenAV ``:address`` segment: ``user:pass@host`` (INTERNAL — never
-        return this to a tool caller; it embeds the password)."""
-        return f"{self.username}:{self.password}@{self.host}"
+        return this to a tool caller; it embeds the password).
+
+        Username and password are percent-encoded (``quote(..., safe="")``) so a
+        ``/``, ``#``, ``?``, ``:`` or ``@`` in them stays inside this one path segment;
+        the Go drivers' ``parseSocketKey`` decodes them again."""
+        user = quote(self.username, safe="")
+        password = quote(self.password, safe="")
+        return f"{user}:{password}@{self.host}"
 
 
 @dataclass
@@ -64,12 +71,13 @@ def load_config_from_env() -> OpenAVConfig:
         except json.JSONDecodeError as exc:
             raise ValueError(f"OPENAV_DEVICES is not valid JSON: {exc}") from exc
         if not isinstance(parsed, list):
-            raise ValueError(
-                f"OPENAV_DEVICES must be a JSON list, got {type(parsed).__name__}"
-            )
+            raise ValueError(f"OPENAV_DEVICES must be a JSON list, got {type(parsed).__name__}")
         for i, d in enumerate(parsed):
             if not isinstance(d, dict):
-                raise ValueError(f"OPENAV_DEVICES[{i}] must be an object, got {type(d).__name__}")
+                # Every malformed OPENAV_DEVICES raises ValueError: one contract for callers.
+                raise ValueError(  # noqa: TRY004
+                    f"OPENAV_DEVICES[{i}] must be an object, got {type(d).__name__}"
+                )
             for required in ("alias", "host"):
                 if required not in d:
                     # Report the entry's keys only, never its values — one of them may be

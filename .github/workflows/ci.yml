@@ -4,57 +4,100 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with the golang base image in both service Dockerfiles.
+  GO_VERSION: "1.27.4"
 
 jobs:
-  go-pearl:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          submodules: recursive
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: "1.25"
-      - run: bash ./init-framework-mod.sh
-        working-directory: openav-epiphan-pearl
-      - run: go test ./source/ -v
-        working-directory: openav-epiphan-pearl
-
-  go-ec20:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          submodules: recursive
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: "1.25"
-      - run: bash ./init-framework-mod.sh
-        working-directory: openav-epiphan-ec20
-      - run: go test ./source/ -v
-        working-directory: openav-epiphan-ec20
-
-  openav-mcp:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-      - run: pip install -e ".[dev]"
-        working-directory: openav-mcp
-      - run: ruff check .
-        working-directory: openav-mcp
-      - run: pytest -q
-        working-directory: openav-mcp
-
-  docker-build:
-    runs-on: ubuntu-latest
+  go:
+    name: Go tests and vulncheck (${{ matrix.service }})
     strategy:
+      fail-fast: false
       matrix:
         service: [openav-epiphan-pearl, openav-epiphan-ec20]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
-      - run: docker build -t ${{ matrix.service }} ./${{ matrix.service }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - run: bash ./init-framework-mod.sh
+      - run: go vet ./source/
+      - run: go test ./source/ -v
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  openav-mcp:
+    name: openav-mcp lint, tests and audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: openav-mcp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv sync --frozen --extra dev
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen python -m pytest -q
+      - name: pip-audit (locked dependencies)
+        run: |
+          uv export --frozen --no-hashes --no-emit-project --extra dev > "$RUNNER_TEMP/req.txt"
+          uvx pip-audit@2.10.1 --no-deps --disable-pip -r "$RUNNER_TEMP/req.txt"
+      - name: bandit (medium and above)
+        run: uvx bandit@1.9.4 -r openav_mcp -ll -q
+
+  docker-build:
+    name: Docker image (${{ matrix.service }})
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [openav-epiphan-pearl, openav-epiphan-ec20, openav-mcp]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: docker build
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: docker build -t "$SERVICE:ci" "./$SERVICE"
+
+  secrets:
+    name: Secrets scan
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # scan every commit, not just the tip
+          persist-credentials: false
+      - name: gitleaks (pinned release, checksum verified)
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact -v .

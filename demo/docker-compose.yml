@@ -1,8 +1,13 @@
 services:
   orchestrator:
-    image: ghcr.io/dartmouth-openav/orchestrator:latest
+    # Pinned by digest: resolved from ghcr.io/dartmouth-openav/orchestrator:latest on
+    # 2026-11-11 (`docker buildx imagetools inspect ...:latest`; single-arch linux/amd64
+    # manifest). To update, re-resolve :latest and replace the digest by hand:
+    # .github/dependabot.yml does not watch demo/.
+    image: ghcr.io/dartmouth-openav/orchestrator:latest@sha256:6ecc39430dda64aadb6b110e063edc57b09fbff54e8908350ed6f308a18d1c03
     ports:
-      - "8080:80"
+      # Loopback only: the orchestrator API is unauthenticated control of the room.
+      - "127.0.0.1:8080:80"
     environment:
       - ADDRESS_MICROSERVICES_BY_NAME=true
       - SYSTEM_CONFIGURATIONS_VIA_VOLUME=true
