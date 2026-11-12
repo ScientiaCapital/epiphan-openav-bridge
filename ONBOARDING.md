@@ -25,7 +25,7 @@ cd openav-epiphan-pearl  && go test ./source/   # → green
   PTZ/presets/home/jog/position, **CGI** (`/cgi-bin/auth.cgi` session + `ptzctrl.cgi`/`param.cgi`) for
   AI tracking + status. `openav-mcp` exposes `ec20_jog` + `ec20_preset_save`. All suites green, DA-audited.
 - **Next sprint = live hardware bring-up.** Everything is code-complete; what remains needs the devices
-  on the `192.168.8.x` LAN. **Read [`HANDOFF.md` → "Next Sprint"](HANDOFF.md)** — it has the exact steps and
+  on the `192.0.2.x` LAN. **Read [`HANDOFF.md` → "Next Sprint"](HANDOFF.md)** — it has the exact steps and
   the two isolated CONFIRM-ON-HARDWARE spots.
 
 ## Repo map
@@ -35,14 +35,14 @@ cd openav-epiphan-pearl  && go test ./source/   # → green
 | `openav-epiphan-pearl/` | Pearl Go microservice (real REST API v2.0) |
 | `openav-mcp/` | Python MCP server — the agent-facing tool layer |
 | `demo/` | docker-compose stack + **[`DEPLOY-RPI5.md`](demo/DEPLOY-RPI5.md)** (Raspberry Pi 5 deploy) |
-| `.claude/programs/ec20-api-discovery.md` | The reverse-engineered EC20 API contract (ground truth) |
+| `docs/ec20-protocol-notes.md` | The reverse-engineered EC20 API contract (ground truth) |
 | `.claude/observers/QUALITY.md` | End-of-sprint audit + backlog |
 
 ## Gotchas worth knowing up front
 - **EC20**: `admin`/`admin`; HTTP **Digest** (not Basic); VISCA is **raw over TCP `:5678`** (not Sony UDP
   `:52381`, not CGI). Its CGI/lighttpd plane can **wedge under repeated hung requests — power-cycle clears it**.
-- **Device IPs** (current lab): EC20 `192.168.8.11`, Pearl Mini `192.168.8.4` — same subnet; the dev box
-  must be **on the `192.168.8.x` LAN** to reach them.
+- **Device IPs** (current lab): EC20 `192.0.2.11`, Pearl Mini `192.0.2.4` — same subnet; the dev box
+  must be **on the `192.0.2.x` LAN** to reach them.
 - The `source/microservice-framework/` submodule ships no `go.mod` (upstream gitignores it) — run
   `bash ./init-framework-mod.sh` in a service dir before `go test`/`go build` on a fresh clone.
 

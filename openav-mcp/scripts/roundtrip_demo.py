@@ -21,10 +21,20 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 DEVICES = json.dumps(
     [
-        {"alias": "room-320b-pearl", "host": "pearl-host", "username": "admin",
-         "password": "s3cret", "kind": "pearl"},
-        {"alias": "room-320b-cam", "host": "ec20-host", "username": "admin",
-         "password": "s3cret", "kind": "ec20"},
+        {
+            "alias": "room-320b-pearl",
+            "host": "pearl-host",
+            "username": "admin",
+            "password": "s3cret",
+            "kind": "pearl",
+        },
+        {
+            "alias": "room-320b-cam",
+            "host": "ec20-host",
+            "username": "admin",
+            "password": "s3cret",
+            "kind": "ec20",
+        },
     ]
 )
 
@@ -41,7 +51,9 @@ async def main() -> int:
         tools = await session.list_tools()
         names = sorted(t.name for t in tools.tools)
         print(f"discovered {len(names)} tools:", names)
-        assert {"run_scene", "set_room_state", "pearl_control_recording", "ec20_tracking"} <= set(names)
+        assert {"run_scene", "set_room_state", "pearl_control_recording", "ec20_tracking"} <= set(
+            names
+        )
 
         scene = await session.call_tool(
             "run_scene", {"system": "smart-room-demo", "scene": "record_session"}

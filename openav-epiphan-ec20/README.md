@@ -14,7 +14,7 @@ the EC20's **two real, hardware-verified control planes** (the device has no RES
 > **Two items are CONFIRM-ON-HARDWARE** (isolated to one function each): the exact AI-tracking command
 > (`ec20TrackingCommand` in `cgiauth.go`) and the degrees→VISCA-units mapping for absolute PTZ
 > (`controlPTZ` calibration constants in `driver.go`). Everything else is verified. See
-> `.claude/programs/ec20-api-discovery.md`.
+> `docs/ec20-protocol-notes.md`.
 
 ## Requirements
 
@@ -49,7 +49,7 @@ the EC20's **two real, hardware-verified control planes** (the device has no RES
 
 Include EC20 credentials in the address (default `admin`/`admin`):
 ```
-admin:password@192.168.1.100
+admin:password@192.0.2.100
 ```
 
 ## Docker Build & Run
@@ -63,30 +63,30 @@ docker run -p 8082:80 openav-epiphan-ec20
 
 ```bash
 # Status (VISCA units) / health / position
-curl http://localhost:8082/admin:admin@192.168.1.100/status
-curl http://localhost:8082/admin:admin@192.168.1.100/healthcheck
-curl http://localhost:8082/admin:admin@192.168.1.100/ptzposition
+curl http://localhost:8082/admin:<password>@192.0.2.100/status
+curl http://localhost:8082/admin:<password>@192.0.2.100/healthcheck
+curl http://localhost:8082/admin:<password>@192.0.2.100/ptzposition
 
 # Live preview URL (consume with any RTSP client)
-curl http://localhost:8082/admin:admin@192.168.1.100/preview
+curl http://localhost:8082/admin:<password>@192.0.2.100/preview
 
 # Jog: nudge up at speed 10, then stop
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/jog/up/10
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/jog/stop/0
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/jog/up/10
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/jog/stop/0
 
 # Recall preset 1 / save current position to preset 1 as "Podium"
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/preset/1
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/presetsave/1/Podium
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/preset/1
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/presetsave/1/Podium
 
 # Absolute PTZ (secondary): pan=45°, tilt=-10°, zoom, optional speed
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/ptz/45/-10 \
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/ptz/45/-10 \
   -H "Content-Type: application/json" -d '{"zoom":2.0}'
 
 # Home / AI tracking
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/ptzhome
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/tracking/enable \
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/ptzhome
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/tracking/enable \
   -H "Content-Type: application/json" -d '"presenter"'
-curl -X PUT http://localhost:8082/admin:admin@192.168.1.100/tracking/disable
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.100/tracking/disable
 ```
 
 ## Testing
@@ -100,7 +100,7 @@ go test ./source/ -v
 ## EC20 Reference
 
 - [EC20 Product Page](https://www.epiphan.com/products/ec20/)
-- Control planes reverse-engineered + verified on hardware — see `.claude/programs/ec20-api-discovery.md`.
+- Control planes reverse-engineered + verified on hardware — see `docs/ec20-protocol-notes.md`.
   Epiphan's own sanctioned integration paths are VISCA-over-IP (`:52381`, if enabled) and ONVIF.
 
 ## License

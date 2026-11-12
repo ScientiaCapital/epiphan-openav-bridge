@@ -80,7 +80,9 @@ class OpenAVClient:
             raise DeviceRequestError(
                 f"device request failed: HTTP {exc.response.status_code}"
             ) from None
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            # InvalidURL is not an HTTPError subclass, and its message quotes the URL
+            # (and so the credentials) — report only the exception type.
             raise DeviceRequestError(f"device request failed: {type(exc).__name__}") from None
 
     async def _put(self, url: str, json_body: Any) -> Any:
@@ -191,7 +193,9 @@ class OpenAVClient:
             "ok": True,
         }
 
-    async def ec20_tracking(self, device: str, action: str, mode: str = "presenter") -> dict[str, Any]:
+    async def ec20_tracking(
+        self, device: str, action: str, mode: str = "presenter"
+    ) -> dict[str, Any]:
         if action not in {"enable", "disable"}:
             raise ValueError("action must be 'enable' or 'disable'")
         self._require_kind(device, "ec20")
@@ -234,7 +238,9 @@ class OpenAVClient:
             raise ValueError("speed must be 1-24")
         self._require_kind(device, "ec20")
         if not self.config.mock:
-            await self._device_put(self.config.ec20_service_url, device, f"jog/{direction}/{speed}", "")
+            await self._device_put(
+                self.config.ec20_service_url, device, f"jog/{direction}/{speed}", ""
+            )
         else:
             self._mock_devices.setdefault(device, {})["jog"] = [direction, speed]
         return {"device": device, "direction": direction, "speed": speed, "ok": True}

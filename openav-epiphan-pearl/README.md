@@ -32,7 +32,7 @@ An OpenAV microservice for controlling Epiphan Pearl encoders via the Pearl REST
 
 Include Pearl credentials in the address:
 ```
-admin:password@192.168.1.100
+admin:password@192.0.2.100
 ```
 
 ## Docker Build & Run
@@ -46,18 +46,18 @@ docker run -p 80:80 openav-epiphan-pearl
 
 ```bash
 # Get device status
-curl http://localhost/admin:mypass@192.168.1.100/status
+curl http://localhost/admin:mypass@192.0.2.100/status
 
 # Start recording
-curl -X PUT http://localhost/admin:mypass@192.168.1.100/recording \
+curl -X PUT http://localhost/admin:mypass@192.0.2.100/recording \
   -H "Content-Type: application/json" -d '"start"'
 
 # Stop recording
-curl -X PUT http://localhost/admin:mypass@192.168.1.100/recording \
+curl -X PUT http://localhost/admin:mypass@192.0.2.100/recording \
   -H "Content-Type: application/json" -d '"stop"'
 
 # Health check
-curl http://localhost/admin:mypass@192.168.1.100/healthcheck
+curl http://localhost/admin:mypass@192.0.2.100/healthcheck
 ```
 
 ## Testing

@@ -6,9 +6,9 @@ Tests that Epiphan EC20 and Pearl RTSP streams ingest cleanly into ffmpeg,
 matching the pipeline OpenAV uses at Dartmouth with Magewell converters.
 
 Usage:
-    python rtsp_test.py --ec20-ip 192.168.1.50
-    python rtsp_test.py --pearl-ip 192.168.1.100
-    python rtsp_test.py --ec20-ip 192.168.1.50 --pearl-ip 192.168.1.100
+    python rtsp_test.py --ec20-ip 192.0.2.50
+    python rtsp_test.py --pearl-ip 192.0.2.100
+    python rtsp_test.py --ec20-ip 192.0.2.50 --pearl-ip 192.0.2.100
 """
 
 from __future__ import annotations
@@ -311,10 +311,10 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --ec20-ip 192.168.1.50
-  %(prog)s --pearl-ip 192.168.1.100
-  %(prog)s --ec20-ip 192.168.1.50 --pearl-ip 192.168.1.100
-  %(prog)s --ec20-ip 192.168.1.50 --probe-only
+  %(prog)s --ec20-ip 192.0.2.50
+  %(prog)s --pearl-ip 192.0.2.100
+  %(prog)s --ec20-ip 192.0.2.50 --pearl-ip 192.0.2.100
+  %(prog)s --ec20-ip 192.0.2.50 --probe-only
         """,
     )
 

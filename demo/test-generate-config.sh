@@ -30,10 +30,10 @@ cp "$CONFIG_FILE" "$BACKUP_FILE"
 
 # Create test .env file with known values
 cat > "$TEST_ENV_FILE" <<'TESTENV'
-PEARL_HOST=10.0.0.50
+PEARL_HOST=192.0.2.50
 PEARL_USERNAME=myadmin
 PEARL_PASSWORD=s3cret!
-EC20_HOST=10.0.0.51
+EC20_HOST=192.0.2.51
 EC20_USERNAME=camuser
 EC20_PASSWORD=c@mpa$$
 TESTENV
@@ -68,7 +68,7 @@ fi
 
 # --- Test: Pearl credentials substituted ---
 echo "=== Test: Pearl credentials substituted ==="
-if grep -q "myadmin:s3cret!@10.0.0.50" "$CONFIG_FILE"; then
+if grep -q "myadmin:s3cret!@192.0.2.50" "$CONFIG_FILE"; then
     pass "Pearl host/username/password substituted correctly"
 else
     fail "Pearl credentials not found in output"
@@ -76,7 +76,7 @@ fi
 
 # --- Test: EC20 credentials substituted ---
 echo "=== Test: EC20 credentials substituted ==="
-if grep -q 'camuser:c@mpa$$@10.0.0.51' "$CONFIG_FILE"; then
+if grep -q 'camuser:c@mpa$$@192.0.2.51' "$CONFIG_FILE"; then
     pass "EC20 host/username/password substituted correctly"
 else
     fail "EC20 credentials not found in output"
@@ -120,17 +120,17 @@ fi
 echo "=== Test: Sed metacharacters in password ==="
 METACHAR_ENV="$SCRIPT_DIR/.env.metachar"
 cat > "$METACHAR_ENV" <<'METAENV'
-PEARL_HOST=10.0.0.60
+PEARL_HOST=192.0.2.60
 PEARL_USERNAME=admin
 PEARL_PASSWORD=p&ss|w\rd
-EC20_HOST=10.0.0.61
+EC20_HOST=192.0.2.61
 EC20_USERNAME=admin
 EC20_PASSWORD=t&st|p\ss
 METAENV
 if bash "$SCRIPT_DIR/generate-config.sh" "$METACHAR_ENV" 2>/dev/null; then
     # Verify the literal metacharacters appear in output
-    if grep -qF 'admin:p&ss|w\rd@10.0.0.60' "$CONFIG_FILE" && \
-       grep -qF 'admin:t&st|p\ss@10.0.0.61' "$CONFIG_FILE"; then
+    if grep -qF 'admin:p&ss|w\rd@192.0.2.60' "$CONFIG_FILE" && \
+       grep -qF 'admin:t&st|p\ss@192.0.2.61' "$CONFIG_FILE"; then
         pass "Sed metacharacters preserved in passwords"
     else
         fail "Sed metacharacters corrupted in output"
@@ -146,7 +146,7 @@ bash "$SCRIPT_DIR/generate-config.sh" "$TEST_ENV_FILE" 2>/dev/null || true
 echo "=== Test: Missing env var causes error ==="
 PARTIAL_ENV="$SCRIPT_DIR/.env.partial"
 cat > "$PARTIAL_ENV" <<'PARTIALENV'
-PEARL_HOST=10.0.0.50
+PEARL_HOST=192.0.2.50
 PARTIALENV
 if bash "$SCRIPT_DIR/generate-config.sh" "$PARTIAL_ENV" 2>/dev/null; then
     fail "Script should fail when required env vars are missing"

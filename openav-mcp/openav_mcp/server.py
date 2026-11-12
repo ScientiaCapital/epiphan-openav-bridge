@@ -1,8 +1,9 @@
 """MCP server exposing the OpenAVClient's two tool layers to an LLM agent.
 
-Read-only tools are always exported; mutating (device/scene control) tools are
-gated by ``mutating_enabled`` — mirroring SilkRoute's read-only-default export
-policy so a demo/monitoring deployment can't accidentally drive hardware.
+Read-only tools are always exported. Mutating (device and scene control) tools are
+exported only when ``mutating_enabled`` is true, which is the default; start the
+server with ``--read-only`` for a monitoring deployment that must not drive hardware.
+A disabled tool is refused at call time as well as hidden from the tool list.
 """
 
 from __future__ import annotations
@@ -38,54 +39,151 @@ class _Spec:
 
 _SPECS: list[_Spec] = [
     # -- scene layer --
-    _Spec("set_room_state", "Set one control on a room via the OpenAV orchestrator.",
-          _schema({"system": {"type": "string"}, "control_set": {"type": "string"},
-                   "control": {"type": "string"}, "value": {"type": "boolean"}},
-                  ["system", "control_set", "control", "value"]), False, "set_room_state"),
-    _Spec("run_scene", "Run a named multi-step room scene (e.g. record_session).",
-          _schema({"system": {"type": "string"}, "scene": {"type": "string"}},
-                  ["system", "scene"]), False, "run_scene"),
-    _Spec("list_room_controls", "List available scenes and control sets for a room.",
-          _schema({"system": {"type": "string"}}, ["system"]), True, "list_room_controls"),
+    _Spec(
+        "set_room_state",
+        "Set one control on a room via the OpenAV orchestrator.",
+        _schema(
+            {
+                "system": {"type": "string"},
+                "control_set": {"type": "string"},
+                "control": {"type": "string"},
+                "value": {"type": "boolean"},
+            },
+            ["system", "control_set", "control", "value"],
+        ),
+        False,
+        "set_room_state",
+    ),
+    _Spec(
+        "run_scene",
+        "Run a named multi-step room scene (e.g. record_session).",
+        _schema({"system": {"type": "string"}, "scene": {"type": "string"}}, ["system", "scene"]),
+        False,
+        "run_scene",
+    ),
+    _Spec(
+        "list_room_controls",
+        "List available scenes and control sets for a room.",
+        _schema({"system": {"type": "string"}}, ["system"]),
+        True,
+        "list_room_controls",
+    ),
     # -- device layer: Pearl --
-    _Spec("pearl_control_recording", "Start or stop recording on a Pearl encoder.",
-          _schema({**_DEVICE, "action": {"type": "string", "enum": ["start", "stop"]}},
-                  ["device", "action"]), False, "pearl_control_recording"),
-    _Spec("pearl_singletouch", "Start/stop Pearl recording + streaming together.",
-          _schema({**_DEVICE, "action": {"type": "string", "enum": ["start", "stop"]}},
-                  ["device", "action"]), False, "pearl_singletouch"),
-    _Spec("pearl_status", "Get a Pearl encoder's recording status.",
-          _schema({**_DEVICE}, ["device"]), True, "pearl_status"),
+    _Spec(
+        "pearl_control_recording",
+        "Start or stop recording on a Pearl encoder.",
+        _schema(
+            {**_DEVICE, "action": {"type": "string", "enum": ["start", "stop"]}},
+            ["device", "action"],
+        ),
+        False,
+        "pearl_control_recording",
+    ),
+    _Spec(
+        "pearl_singletouch",
+        "Start/stop Pearl recording + streaming together.",
+        _schema(
+            {**_DEVICE, "action": {"type": "string", "enum": ["start", "stop"]}},
+            ["device", "action"],
+        ),
+        False,
+        "pearl_singletouch",
+    ),
+    _Spec(
+        "pearl_status",
+        "Get a Pearl encoder's recording status.",
+        _schema({**_DEVICE}, ["device"]),
+        True,
+        "pearl_status",
+    ),
     # -- device layer: EC20 --
     # Preferred framing verbs are presets + tracking + jog; ec20_ptz (absolute
     # degrees) is secondary — the degree→VISCA-unit mapping is calibrated best-effort.
-    _Spec("ec20_jog", "Nudge an EC20 camera in a direction (VISCA drive; 'stop' halts). Preferred for live framing.",
-          _schema({**_DEVICE,
-                   "direction": {"type": "string", "enum": sorted(EC20_JOG_DIRECTIONS)},
-                   "speed": {"type": "integer", "default": 10, "minimum": 1, "maximum": 24,
-                              "description": "pan speed 1-24 (tilt internally capped at 20)"}},
-                  ["device", "direction"]), False, "ec20_jog"),
-    _Spec("ec20_preset_recall", "Recall an EC20 PTZ preset (0-255) — the primary way to frame known shots.",
-          _schema({**_DEVICE, "preset_id": {"type": "integer", "minimum": 0, "maximum": 255}},
-                  ["device", "preset_id"]), False, "ec20_preset_recall"),
-    _Spec("ec20_preset_save", "Save the current EC20 PTZ position to a preset slot (0-255).",
-          _schema({**_DEVICE, "preset_id": {"type": "integer", "minimum": 0, "maximum": 255},
-                   "name": {"type": "string", "description": "optional label, <=64 chars"}},
-                  ["device", "preset_id"]), False, "ec20_preset_save"),
-    _Spec("ec20_tracking", "Enable/disable EC20 AI presenter tracking.",
-          _schema({**_DEVICE, "action": {"type": "string", "enum": ["enable", "disable"]},
-                   "mode": {"type": "string", "enum": ["presenter", "zone"], "default": "presenter"}},
-                  ["device", "action"]), False, "ec20_tracking"),
-    _Spec("ec20_ptz", "Move an EC20 to an absolute pan/tilt/zoom (degrees; secondary — prefer ec20_jog / ec20_preset_recall).",
-          _schema({**_DEVICE,
-                   "pan": {"type": "number", "minimum": -162.5, "maximum": 162.5},
-                   "tilt": {"type": "number", "minimum": -30, "maximum": 90},
-                   "zoom": {"type": "number"},
-                   "speed": {"type": "integer", "default": 50,
-                              "description": "PTZ move speed (positive; clamped to VISCA 1-24)"}},
-                  ["device", "pan", "tilt", "zoom"]), False, "ec20_ptz"),
-    _Spec("ec20_status", "Get an EC20 camera's status (incl. tracking).",
-          _schema({**_DEVICE}, ["device"]), True, "ec20_status"),
+    _Spec(
+        "ec20_jog",
+        "Nudge an EC20 camera in a direction (VISCA drive; 'stop' halts). Preferred for live framing.",
+        _schema(
+            {
+                **_DEVICE,
+                "direction": {"type": "string", "enum": sorted(EC20_JOG_DIRECTIONS)},
+                "speed": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 1,
+                    "maximum": 24,
+                    "description": "pan speed 1-24 (tilt internally capped at 20)",
+                },
+            },
+            ["device", "direction"],
+        ),
+        False,
+        "ec20_jog",
+    ),
+    _Spec(
+        "ec20_preset_recall",
+        "Recall an EC20 PTZ preset (0-255) — the primary way to frame known shots.",
+        _schema(
+            {**_DEVICE, "preset_id": {"type": "integer", "minimum": 0, "maximum": 255}},
+            ["device", "preset_id"],
+        ),
+        False,
+        "ec20_preset_recall",
+    ),
+    _Spec(
+        "ec20_preset_save",
+        "Save the current EC20 PTZ position to a preset slot (0-255).",
+        _schema(
+            {
+                **_DEVICE,
+                "preset_id": {"type": "integer", "minimum": 0, "maximum": 255},
+                "name": {"type": "string", "description": "optional label, <=64 chars"},
+            },
+            ["device", "preset_id"],
+        ),
+        False,
+        "ec20_preset_save",
+    ),
+    _Spec(
+        "ec20_tracking",
+        "Enable/disable EC20 AI presenter tracking.",
+        _schema(
+            {
+                **_DEVICE,
+                "action": {"type": "string", "enum": ["enable", "disable"]},
+                "mode": {"type": "string", "enum": ["presenter", "zone"], "default": "presenter"},
+            },
+            ["device", "action"],
+        ),
+        False,
+        "ec20_tracking",
+    ),
+    _Spec(
+        "ec20_ptz",
+        "Move an EC20 to an absolute pan/tilt/zoom (degrees; secondary — prefer ec20_jog / ec20_preset_recall).",
+        _schema(
+            {
+                **_DEVICE,
+                "pan": {"type": "number", "minimum": -162.5, "maximum": 162.5},
+                "tilt": {"type": "number", "minimum": -30, "maximum": 90},
+                "zoom": {"type": "number"},
+                "speed": {
+                    "type": "integer",
+                    "default": 50,
+                    "description": "PTZ move speed (positive; clamped to VISCA 1-24)",
+                },
+            },
+            ["device", "pan", "tilt", "zoom"],
+        ),
+        False,
+        "ec20_ptz",
+    ),
+    _Spec(
+        "ec20_status",
+        "Get an EC20 camera's status (incl. tracking).",
+        _schema({**_DEVICE}, ["device"]),
+        True,
+        "ec20_status",
+    ),
 ]
 
 
@@ -133,9 +231,7 @@ def build_server(
 
     @server.call_tool()
     async def _call(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
-        if not mutating_enabled and not any(
-            s.name == name and s.read_only for s in _SPECS
-        ):
+        if not mutating_enabled and not any(s.name == name and s.read_only for s in _SPECS):
             text = json.dumps({"error": f"tool '{name}' disabled (mutating tools off)"})
             return [types.TextContent(type="text", text=text)]
         try:

@@ -24,7 +24,7 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,10 +38,20 @@ CAM = "room-320b-cam"
 SECRET = "s3cret"
 DEVICES = json.dumps(
     [
-        {"alias": PEARL, "host": "pearl-320b.av.example", "username": "admin",
-         "password": SECRET, "kind": "pearl"},
-        {"alias": CAM, "host": "ec20-320b.av.example", "username": "admin",
-         "password": SECRET, "kind": "ec20"},
+        {
+            "alias": PEARL,
+            "host": "pearl-320b.av.example",
+            "username": "admin",
+            "password": SECRET,
+            "kind": "pearl",
+        },
+        {
+            "alias": CAM,
+            "host": "ec20-320b.av.example",
+            "username": "admin",
+            "password": SECRET,
+            "kind": "ec20",
+        },
     ]
 )
 
@@ -52,10 +62,10 @@ DEFAULT_MARKDOWN = Path(__file__).resolve().parent.parent / "DEMO.md"
 class Step:
     n: int
     title: str
-    intent: str          # why the agent does this (plain English)
-    tool: str            # MCP tool called ("—" for protocol-level steps)
+    intent: str  # why the agent does this (plain English)
+    tool: str  # MCP tool called ("—" for protocol-level steps)
     args: dict[str, Any]
-    result: str          # compact result shown to the user
+    result: str  # compact result shown to the user
 
 
 @dataclass
@@ -76,8 +86,9 @@ def _compact(text: str) -> str:
         return text
 
 
-async def _call(session: ClientSession, demo: Demo, title: str, intent: str,
-                tool: str, args: dict[str, Any]) -> str:
+async def _call(
+    session: ClientSession, demo: Demo, title: str, intent: str, tool: str, args: dict[str, Any]
+) -> str:
     res = await session.call_tool(tool, args)
     text = res.content[0].text
     demo.record(title, intent, tool, args, _compact(text))
@@ -101,79 +112,158 @@ async def run_scenario(demo: Demo) -> list[str]:
         # 1. Discover — what can the agent do in this room?
         tools = await session.list_tools()
         names = sorted(t.name for t in tools.tools)
-        read_only = sorted(t.name for t in tools.tools if getattr(t.annotations, "readOnlyHint", False))
-        assert {"run_scene", "set_room_state", "pearl_control_recording", "ec20_tracking"} <= set(names)
+        read_only = sorted(
+            t.name for t in tools.tools if getattr(t.annotations, "readOnlyHint", False)
+        )
+        assert {"run_scene", "set_room_state", "pearl_control_recording", "ec20_tracking"} <= set(
+            names
+        )
         demo.record(
-            "Discover tools", "Agent asks the MCP server what it can control.",
-            "list_tools", {},
+            "Discover tools",
+            "Agent asks the MCP server what it can control.",
+            "list_tools",
+            {},
             f"{len(names)} tools ({len(read_only)} read-only, {len(names) - len(read_only)} mutating)",
         )
 
         # 2. Inspect the room (scene layer)
-        await _call(session, demo, "Inspect the room",
-                    "What scenes and controls does Room 320B expose?",
-                    "list_room_controls", {"system": SYSTEM})
+        await _call(
+            session,
+            demo,
+            "Inspect the room",
+            "What scenes and controls does Room 320B expose?",
+            "list_room_controls",
+            {"system": SYSTEM},
+        )
 
         # 3. Baseline status (read-only, device layer)
-        await _call(session, demo, "Baseline: camera", "Is the camera online, is it tracking?",
-                    "ec20_status", {"device": CAM})
-        await _call(session, demo, "Baseline: encoder", "Is the encoder online, is it recording?",
-                    "pearl_status", {"device": PEARL})
+        await _call(
+            session,
+            demo,
+            "Baseline: camera",
+            "Is the camera online, is it tracking?",
+            "ec20_status",
+            {"device": CAM},
+        )
+        await _call(
+            session,
+            demo,
+            "Baseline: encoder",
+            "Is the encoder online, is it recording?",
+            "pearl_status",
+            {"device": PEARL},
+        )
 
         # 4. Frame the podium — preset 0 is the home/podium framing (exercises 0-255 range)
-        await _call(session, demo, "Frame the podium",
-                    "Recall preset 0 — the home/podium shot — before the talk starts.",
-                    "ec20_preset_recall", {"device": CAM, "preset_id": 0})
+        await _call(
+            session,
+            demo,
+            "Frame the podium",
+            "Recall preset 0 — the home/podium shot — before the talk starts.",
+            "ec20_preset_recall",
+            {"device": CAM, "preset_id": 0},
+        )
 
         # 5. Compose the shot (PTZ)
-        await _call(session, demo, "Compose the shot",
-                    "Nudge pan/tilt and pull a little zoom to frame the lectern.",
-                    "ec20_ptz", {"device": CAM, "pan": 12.0, "tilt": -3.0, "zoom": 2.0})
+        await _call(
+            session,
+            demo,
+            "Compose the shot",
+            "Nudge pan/tilt and pull a little zoom to frame the lectern.",
+            "ec20_ptz",
+            {"device": CAM, "pan": 12.0, "tilt": -3.0, "zoom": 2.0},
+        )
 
         # 6. Follow the presenter (AI tracking)
-        await _call(session, demo, "Follow the presenter",
-                    "Enable AI presenter tracking so the camera follows the speaker.",
-                    "ec20_tracking", {"device": CAM, "action": "enable", "mode": "presenter"})
+        await _call(
+            session,
+            demo,
+            "Follow the presenter",
+            "Enable AI presenter tracking so the camera follows the speaker.",
+            "ec20_tracking",
+            {"device": CAM, "action": "enable", "mode": "presenter"},
+        )
 
         # 7. Roll recording (encoder)
-        await _call(session, demo, "Roll recording", "Start recording the session on the Pearl.",
-                    "pearl_control_recording", {"device": PEARL, "action": "start"})
+        await _call(
+            session,
+            demo,
+            "Roll recording",
+            "Start recording the session on the Pearl.",
+            "pearl_control_recording",
+            {"device": PEARL, "action": "start"},
+        )
 
         # 8. Confirm live — status now REFLECTS steps 6-7 (proves real orchestration)
-        await _call(session, demo, "Confirm: camera", "Verify tracking is now active.",
-                    "ec20_status", {"device": CAM})
-        await _call(session, demo, "Confirm: encoder", "Verify recording is now rolling.",
-                    "pearl_status", {"device": PEARL})
+        await _call(
+            session,
+            demo,
+            "Confirm: camera",
+            "Verify tracking is now active.",
+            "ec20_status",
+            {"device": CAM},
+        )
+        await _call(
+            session,
+            demo,
+            "Confirm: encoder",
+            "Verify recording is now rolling.",
+            "pearl_status",
+            {"device": PEARL},
+        )
 
         # 9. The one-command scene (scene layer shorthand for the whole thing)
-        await _call(session, demo, "One-command scene",
-                    "Show the shorthand: a single scene call the orchestrator expands into steps.",
-                    "run_scene", {"system": SYSTEM, "scene": "record_session"})
+        await _call(
+            session,
+            demo,
+            "One-command scene",
+            "Show the shorthand: a single scene call the orchestrator expands into steps.",
+            "run_scene",
+            {"system": SYSTEM, "scene": "record_session"},
+        )
 
         # 10. Wind down
-        await _call(session, demo, "Stop recording", "The talk ends — stop the recording.",
-                    "pearl_control_recording", {"device": PEARL, "action": "stop"})
-        await _call(session, demo, "Release the camera", "Disable tracking and free the camera.",
-                    "ec20_tracking", {"device": CAM, "action": "disable"})
+        await _call(
+            session,
+            demo,
+            "Stop recording",
+            "The talk ends — stop the recording.",
+            "pearl_control_recording",
+            {"device": PEARL, "action": "stop"},
+        )
+        await _call(
+            session,
+            demo,
+            "Release the camera",
+            "Disable tracking and free the camera.",
+            "ec20_tracking",
+            {"device": CAM, "action": "disable"},
+        )
 
         return names
 
 
 async def run_readonly_showcase(demo: Demo) -> list[str]:
     """Spawn a second server in --read-only mode; the mutating tools disappear."""
-    async with stdio_client(_server(read_only=True)) as (read, write), ClientSession(read, write) as session:
+    async with (
+        stdio_client(_server(read_only=True)) as (read, write),
+        ClientSession(read, write) as session,
+    ):
         await session.initialize()
         tools = await session.list_tools()
         names = sorted(t.name for t in tools.tools)
         demo.record(
             "Safety gate (read-only mode)",
             "Re-launched with --read-only: only monitoring tools are exported; nothing can drive hardware.",
-            "list_tools (--read-only)", {}, f"{len(names)} tools: {', '.join(names)}",
+            "list_tools (--read-only)",
+            {},
+            f"{len(names)} tools: {', '.join(names)}",
         )
         return names
 
 
 # ---------------------------------------------------------------- renderers
+
 
 def print_console(demo: Demo) -> None:
     print("Smart-Room Demo — an AI agent runs a lecture capture in Room 320B")
@@ -185,7 +275,7 @@ def print_console(demo: Demo) -> None:
 
 
 def render_markdown(demo: Demo, tool_names: list[str], readonly_names: list[str]) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
     lines: list[str] = []
     lines += [
         "# Smart-Room Demo — an AI agent runs a lecture capture",
@@ -220,17 +310,15 @@ def render_markdown(demo: Demo, tool_names: list[str], readonly_names: list[str]
         "",
         "## The scenario",
         "",
-        "An agent is asked to *\"record the lecture in Room 320B and keep the camera on the",
-        "presenter.\"* Here is every MCP call it makes, in order:",
+        'An agent is asked to *"record the lecture in Room 320B and keep the camera on the',
+        'presenter."* Here is every MCP call it makes, in order:',
         "",
         "| # | Agent intent | MCP tool | Args | Result |",
         "|---|---|---|---|---|",
     ]
     for s in demo.steps:
         args = "`" + json.dumps(s.args, separators=(",", ":")) + "`" if s.args else "—"
-        lines.append(
-            f"| {s.n} | {s.intent} | `{s.tool}` | {args} | `{s.result}` |"
-        )
+        lines.append(f"| {s.n} | {s.intent} | `{s.tool}` | {args} | `{s.result}` |")
     lines += [
         "",
         "Notice steps 9–10: after `ec20_tracking(enable)` (7) and `pearl_control_recording(start)`",
@@ -269,6 +357,7 @@ def render_markdown(demo: Demo, tool_names: list[str], readonly_names: list[str]
 
 # ---------------------------------------------------------------- main
 
+
 async def main_async(markdown_path: Path | None) -> int:
     demo = Demo()
     tool_names = await run_scenario(demo)
@@ -296,8 +385,12 @@ async def main_async(markdown_path: Path | None) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Narrated hardware-free smart-room MCP demo.")
-    ap.add_argument("--markdown", type=Path, default=DEFAULT_MARKDOWN,
-                    help=f"where to write the walkthrough (default: {DEFAULT_MARKDOWN})")
+    ap.add_argument(
+        "--markdown",
+        type=Path,
+        default=DEFAULT_MARKDOWN,
+        help=f"where to write the walkthrough (default: {DEFAULT_MARKDOWN})",
+    )
     ap.add_argument("--no-markdown", action="store_true", help="console only; do not write DEMO.md")
     args = ap.parse_args()
     path = None if args.no_markdown else args.markdown

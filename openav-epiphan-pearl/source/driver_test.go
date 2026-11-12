@@ -195,9 +195,9 @@ func socketKeyFromServer(server *httptest.Server) string {
 // ========== parseSocketKey tests ==========
 
 func TestParseSocketKey_WithCredentials(t *testing.T) {
-	host, user, pass := parseSocketKey("admin:secret@192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("admin:secret@192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "admin" {
 		t.Errorf("expected user admin, got %s", user)
@@ -208,9 +208,9 @@ func TestParseSocketKey_WithCredentials(t *testing.T) {
 }
 
 func TestParseSocketKey_WithProtocolPrefix(t *testing.T) {
-	host, user, pass := parseSocketKey("tcp|admin:secret@192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("tcp|admin:secret@192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "admin" {
 		t.Errorf("expected user admin, got %s", user)
@@ -221,9 +221,9 @@ func TestParseSocketKey_WithProtocolPrefix(t *testing.T) {
 }
 
 func TestParseSocketKey_NoCredentials(t *testing.T) {
-	host, user, pass := parseSocketKey("192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "" {
 		t.Errorf("expected empty user, got %s", user)
@@ -234,9 +234,9 @@ func TestParseSocketKey_NoCredentials(t *testing.T) {
 }
 
 func TestParseSocketKey_PasswordWithColon(t *testing.T) {
-	host, user, pass := parseSocketKey("admin:pass:word@192.168.1.100:80")
-	if host != "192.168.1.100:80" {
-		t.Errorf("expected host 192.168.1.100:80, got %s", host)
+	host, user, pass := parseSocketKey("admin:pass:word@192.0.2.100:80")
+	if host != "192.0.2.100:80" {
+		t.Errorf("expected host 192.0.2.100:80, got %s", host)
 	}
 	if user != "admin" {
 		t.Errorf("expected user admin, got %s", user)

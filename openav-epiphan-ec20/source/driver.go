@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -25,14 +27,26 @@ func parseSocketKey(socketKey string) (host string, username string, password st
 		creds := parts[0]
 		if strings.Contains(creds, ":") {
 			credParts := strings.SplitN(creds, ":", 2)
-			username = credParts[0]
-			password = credParts[1]
+			username = pathUnescapeOrRaw(credParts[0])
+			password = pathUnescapeOrRaw(credParts[1])
 		}
 	} else {
 		host = key
 	}
 
 	return
+}
+
+// pathUnescapeOrRaw percent-decodes a socketKey credential. openav-mcp encodes the
+// username/password in the URL path; the framework's echo router passes the
+// :address param through still-encoded whenever the request needed a RawPath
+// (e.g. %2F, %40, %3A in it), and already-decoded otherwise. A value that is not a
+// valid escape sequence (e.g. a literal "50%off") is returned unchanged.
+func pathUnescapeOrRaw(s string) string {
+	if u, err := url.PathUnescape(s); err == nil {
+		return u
+	}
+	return s
 }
 
 // validatePresetID ensures presetID is a valid integer in the EC20 preset range 0-255.
@@ -161,7 +175,7 @@ func readPTZUnits(socketKey string) (pan, tilt int16, zoom uint16, err error) {
 
 func getCameraStatus(socketKey string) (string, error) {
 	function := "getCameraStatus"
-	framework.Log(function + " - called for: " + socketKey)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey))
 	pan, tilt, zoom, err := readPTZUnits(socketKey)
 	if err != nil {
 		framework.AddToErrors(socketKey, function+" - "+err.Error())
@@ -175,7 +189,7 @@ func getCameraStatus(socketKey string) (string, error) {
 
 func getPTZPosition(socketKey string) (string, error) {
 	function := "getPTZPosition"
-	framework.Log(function + " - called for: " + socketKey)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey))
 	pan, tilt, zoom, err := readPTZUnits(socketKey)
 	if err != nil {
 		framework.AddToErrors(socketKey, function+" - "+err.Error())
@@ -188,7 +202,7 @@ func getPTZPosition(socketKey string) (string, error) {
 }
 
 func getPresets(socketKey string) (string, error) {
-	framework.Log("getPresets - called for: " + socketKey)
+	framework.Log("getPresets - called for: " + redactSocketKey(socketKey))
 	// VISCA has no "list presets" inquiry; presets are addressed by slot (recall/set).
 	return `"unsupported: VISCA has no list-presets inquiry; recall/set by slot 0-255"`, nil
 }
@@ -200,7 +214,7 @@ func getPresets(socketKey string) (string, error) {
 // be read via param.cgi?get_network_conf if it has been changed from the default.
 func getPreview(socketKey string) (string, error) {
 	function := "getPreview"
-	framework.Log(function + " - called for: " + socketKey)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey))
 
 	host, _, _ := parseSocketKey(socketKey)
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -298,7 +312,7 @@ func zoomToUnits(zoom float64) uint16 {
 
 func controlPTZ(socketKey string, panStr string, tiltStr string, bodyStr string) (string, error) {
 	function := "controlPTZ"
-	framework.Log(function + " - called for: " + socketKey + " pan: " + panStr + " tilt: " + tiltStr + " body: " + bodyStr)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey) + " pan: " + panStr + " tilt: " + tiltStr + " body: " + bodyStr)
 
 	panStr = strings.Trim(panStr, `"`)
 	tiltStr = strings.Trim(tiltStr, `"`)
@@ -324,6 +338,21 @@ func controlPTZ(socketKey string, panStr string, tiltStr string, bodyStr string)
 		return "", errors.New(errMsg)
 	}
 	zoom := *body.Zoom
+
+	// Reject NaN/±Inf before the range checks: NaN fails every comparison, so it
+	// would slip past them and reach degreesToUnits/zoomToUnits, where a float->int
+	// conversion of a non-finite value is implementation-defined. ParseFloat accepts
+	// "NaN", "Inf", "infinity"; JSON cannot carry them, but zoom is checked too.
+	for _, v := range []struct {
+		name string
+		val  float64
+	}{{"pan", pan}, {"tilt", tilt}, {"zoom", zoom}} {
+		if math.IsNaN(v.val) || math.IsInf(v.val, 0) {
+			errMsg := fmt.Sprintf(function+" - %s must be a finite number: %v", v.name, v.val)
+			framework.AddToErrors(socketKey, errMsg)
+			return "", errors.New(errMsg)
+		}
+	}
 
 	// speed is a caller-settable PTZ move speed; the EC20 API accepts it per-axis but has no
 	// documented valid range, so only guard against non-positive values. Defaults to the
@@ -374,7 +403,7 @@ func controlPTZ(socketKey string, panStr string, tiltStr string, bodyStr string)
 
 func controlPTZHome(socketKey string) (string, error) {
 	function := "controlPTZHome"
-	framework.Log(function + " - called for: " + socketKey)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey))
 
 	if _, err := viscaSend(socketKey, viscaHome()); err != nil {
 		framework.AddToErrors(socketKey, function+" - "+err.Error())
@@ -386,7 +415,7 @@ func controlPTZHome(socketKey string) (string, error) {
 
 func recallPreset(socketKey string, presetID string) (string, error) {
 	function := "recallPreset"
-	framework.Log(function + " - called for: " + socketKey + " preset: " + presetID)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey) + " preset: " + presetID)
 
 	presetID = strings.Trim(presetID, `"`)
 
@@ -407,7 +436,7 @@ func recallPreset(socketKey string, presetID string) (string, error) {
 
 func savePreset(socketKey string, presetID string, name string) (string, error) {
 	function := "savePreset"
-	framework.Log(function + " - called for: " + socketKey + " preset: " + presetID + " name: " + name)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey) + " preset: " + presetID + " name: " + name)
 
 	presetID = strings.Trim(presetID, `"`)
 	name = strings.Trim(name, `"`)
@@ -494,7 +523,7 @@ func jogDirection(dir string) (panDir, tiltDir byte, ok bool) {
 
 func controlTracking(socketKey string, action string, mode string) (string, error) {
 	function := "controlTracking"
-	framework.Log(function + " - called for: " + socketKey + " action: " + action + " mode: " + mode)
+	framework.Log(function + " - called for: " + redactSocketKey(socketKey) + " action: " + action + " mode: " + mode)
 
 	action = strings.Trim(action, `"`)
 	mode = strings.Trim(mode, `"`)

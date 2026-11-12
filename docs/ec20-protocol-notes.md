@@ -1,5 +1,63 @@
 # EC20 API Discovery Program
 
+## Current implementation (as of 2026-11-11)
+
+This section describes what the shipped driver in `openav-epiphan-ec20/source/` does. Where
+it disagrees with anything further down, this section wins: the rest of the file is the
+discovery history and is kept as written, with superseded parts marked.
+
+**Motion, presets, position and health: raw VISCA over TCP :5678** (`visca.go`)
+
+- `viscaSend` dials `<device host>:5678` (`viscaPort`), writes one raw VISCA frame (no Sony
+  8-byte UDP header), skips ACKs (`90 4y FF`), returns the completion (`90 5y FF`) and turns
+  an error reply (`90 6y FF`) into an error. Connect and each read/write are bounded by
+  `viscaDialTimeout` (5 s). The port in the socketKey (the HTTP port) is ignored for VISCA,
+  and so are the credentials: per the `visca.go` comments, :5678 is unauthenticated.
+- `visca.go` records the transport as hardware-verified on 2026-07-18/19 (fw 3.3.40), and
+  notes that Sony VISCA-over-IP on UDP :52381 (the port in Epiphan's docs) did not respond
+  on that unit.
+- Frames used, by driver function (`driver.go`):
+
+  | Driver function (PUT/GET setting) | VISCA frame |
+  |---|---|
+  | `controlPTZ` (`ptz`) | absolute pan/tilt `81 01 06 02 VV WW p p p p t t t t FF`, then zoom direct `81 01 04 47 z z z z FF` |
+  | `controlPTZHome` (`ptzhome`) | `81 01 06 04 FF` |
+  | `recallPreset` (`preset`) | `81 01 04 3F 02 nn FF` |
+  | `savePreset` (`presetsave`) | `81 01 04 3F 01 nn FF` (the preset name is validated but not sent) |
+  | `jogPTZ` (`jog`) | pan-tilt drive `81 01 06 01 VV WW <panDir> <tiltDir> FF`; `stop` sends `03 03` |
+  | `getCameraStatus` (`status`), `getPTZPosition` (`ptzposition`) | inquiries `81 09 06 12 FF` (pan/tilt) and `81 09 04 47 FF` (zoom); values are raw VISCA units |
+  | `healthCheck` (`healthcheck`) | version inquiry `81 09 00 02 FF` |
+
+- `controlPTZ` takes degrees and validates pan -162.5..162.5 and tilt -30..90 (it refuses
+  NaN/Inf first). The degrees-to-units scale (`panUnitsPerDegree`, `tiltUnitsPerDegree` =
+  14.0) is marked PLACEHOLDER in `driver.go` and still needs calibrating on hardware. Zoom
+  is passed as a raw VISCA zoom position clamped to 0..0x4000 (`zoomMax`, marked
+  NEEDS-PROBE).
+- `getPresets` returns an "unsupported" string: VISCA has no list-presets inquiry.
+- `getPreview` makes no device call; it returns `rtsp://<host>:554/1`.
+
+**AI tracking only: CGI with an app-layer session token** (`cgiauth.go`)
+
+- `controlTracking` (`tracking`) is the only feature on the CGI surface. It sends an HTTP
+  **GET** (not POST) to the path from `ec20TrackingCommand`:
+  `/cgi-bin/ptzctrl.cgi?post_aimode&Single_Track` (presenter, the default),
+  `...&Frame_Track` (zone) or `...&Off` (disable). The code marks this command
+  "CONFIRM ON HARDWARE": it is not in public docs, and `/cgi-bin/vip?set_ai_vip&vip=<1|0>`
+  is the recorded alternative.
+- Before the command, `ec20Login` runs the `/cgi-bin/auth.cgi` handshake (see Appendix A
+  below) and the `authorization` token it returns is sent as a lowercase `authorization`
+  request header. If lighttpd answers with a transport HTTP Digest challenge, `ec20CGIDo`
+  answers it (MD5, qop=auth) while keeping the app token as a separate header line.
+- Tokens are cached per device host **and** credentials (key: host plus SHA-256 of
+  `user:password`; the plaintext password is never a key), for at most 10 minutes
+  (`cgiSessionTTL`), in a cache of at most 64 entries (`cgiSessionMaxEntries`). A bare 401
+  drops the cached token, triggers exactly one fresh login and one retry; a second 401
+  drops that token too and returns an error.
+- `param.cgi`, `login.cgi`, the `jwt` header and the WebSocket on :4567 are **not used**
+  by the driver. The `jwt` value from auth.cgi is stored but never sent.
+
+---
+
 > ✅ **REDESIGN COMPLETE (sprint `feat/ec20-hybrid-driver`, 2026-07-21).** The driver no longer uses the
 > RESTful `/api/*` placeholder model this program set out to discover — that model was wrong. It now runs
 > on the real, hardware-verified planes: **VISCA-over-IP (raw, TCP :5678)** for PTZ/presets/home/position,
@@ -27,7 +85,7 @@ Inspired by [Karpathy's autoresearch](https://github.com/karpathy/autoresearch):
 ## Prerequisites
 
 ```bash
-export EC20_HOST=192.168.x.x    # Real EC20 IP
+export EC20_HOST=192.0.2.10    # Real EC20 IP
 export EC20_USERNAME=admin       # Device credentials
 export EC20_PASSWORD=changeme
 ```
@@ -188,14 +246,14 @@ path structure faster than brute-forcing the candidate lists.
 
 ---
 
-## 🔴 LIVE HARDWARE DISCOVERY — 2026-07-18 (device @ 192.168.8.11, admin/admin)
+## 🔴 LIVE HARDWARE DISCOVERY — 2026-07-18 (device @ 192.0.2.11, its admin credentials)
 
 First live session against a real EC20. **Two headline findings supersede the assumptions above.**
 Full session fingerprint captured in scratch `ec20_live_findings.md`.
 
 ### 1. Auth is HTTP **Digest**, not Basic — **FIXED in driver.go**
 `lighttpd/1.4.75` answers every request with `WWW-Authenticate: Digest realm="", algorithm=MD5,
-qop="auth"`. Basic → **401** always; `curl --digest -u admin:admin` → **200**. The driver's
+qop="auth"`. Basic → **401** always; `curl --digest -u admin:<password> → **200**. The driver's
 `req.SetBasicAuth` was broken against real hardware regardless of credentials.
 - **Fix landed:** `ec20APIRequest` → `ec20DoWithDigest`, an RFC 2617 MD5/qop=auth handshake using
   stdlib only (`crypto/md5`, `crypto/rand`) — **no new dependency**. Falls back to Basic for
@@ -208,6 +266,11 @@ Reverse-engineered from the web-UI JS (`/js/build-new.min.js`). The device is a 
 AI-tracking PTZ camera; the `ptzctrl.cgi`/`param.cgi` grammar matches **SMTAV** BA20S/BA30S (publicly
 documented). Epiphan's *official* integration story is VISCA-over-IP :52381 + ONVIF — they do **not**
 publicly document this CGI surface (no Swagger/REST spec exists, unlike Pearl).
+
+> **Superseded (see "Current implementation" at the top).** The driver does not route PTZ,
+> zoom, home or presets through `ptzctrl.cgi`; those use raw VISCA over TCP :5678. Of this
+> table only the AI-tracking row (`post_aimode`) is used, sent as a GET. Kept as discovery
+> history.
 
 - **PTZ / zoom / focus / preset / tracking** → `POST /cgi-bin/ptzctrl.cgi?ptzcmd&...`
   (public grammar, cross-checked vs SMTAV):
@@ -236,6 +299,11 @@ publicly document this CGI surface (no Swagger/REST spec exists, unlike Pearl).
 - Quirk: unknown `/api/` commands return **200** with `{"err":"Invalid API command"}`.
 
 ### Redesign scope (DEFERRED — separate session)
+
+> **Superseded.** The redesign shipped differently from this plan: VISCA over TCP :5678 for
+> motion and status, and `auth.cgi` (not `login.cgi`/JWT) for the tracking command only.
+> See "Current implementation" at the top.
+
 A correct EC20 driver must: (a) HTTP Digest [**DONE**], (b) `login.cgi` JWT session, (c) `param.cgi` +
 `ptzctrl.cgi?ptzcmd` VISCA-style command model. This is a driver **redesign**, not a constant swap.
 PTZ/preset/zoom/tracking grammar is public (SMTAV); param.cgi/JWT/WebSocket are not.
@@ -248,6 +316,12 @@ PTZ/preset/zoom/tracking grammar is public (SMTAV); param.cgi/JWT/WebSocket are 
 ---
 
 ## Discovery Log
+
+> **Superseded (see "Current implementation" at the top).** The "Real target (CGI)" column
+> was the plan for the redesign, not what shipped: Status, Position, Pan/Tilt, Zoom, Home,
+> Preset Goto and Preset Save are VISCA over TCP :5678; Presets is unsupported; Preview is
+> an RTSP URL; only Tracking On/Off use `ptzctrl.cgi?post_aimode`. Kept as discovery
+> history.
 
 **All 12 RESTful placeholders are wrong in MODEL** (real API is CGI — see LIVE DISCOVERY above).
 Superseded 2026-07-18. Real targets below are ground-truth mappings for the deferred redesign.
@@ -293,3 +367,24 @@ curl -u $EC20_USERNAME:$EC20_PASSWORD http://$EC20_HOST/ -s | grep -i "api\|fetc
 ```
 
 If the web UI loads, inspect its JavaScript for API calls — this often reveals the real endpoint structure faster than brute-force probing.
+
+---
+
+## Appendix A — auth.cgi handshake, as implemented
+
+Referenced from `cgiauth.go`. Summarised from that file's comments and code
+(`parseCGIChallenge`, `ec20CGIResponse`, `ec20CGIAuthHeader`, `ec20Login`), which were
+reverse-engineered from the device web UI (`build-new.min.js`). All requests are
+`GET /cgi-bin/auth.cgi`.
+
+1. Without an `authenticate` header the device answers 401 with a custom challenge:
+   `WWW-Authenticate: base64(realm) "." base64(nonce) "." base64(qop)`.
+2. `HA1 = md5(user:realm:pass)`, `HA2 = md5("GET:/auth.cgi")` (the short URI, although
+   the request path is `/cgi-bin/auth.cgi`),
+   `response = md5(HA1:nonce:nc:cnonce:HA2)`. `nc` is a raw integer (the driver sends 1,
+   not zero-padded) and qop is not part of the hash. The cnonce is 32 hex characters.
+3. Resend with the request header
+   `authenticate: username="..",nonce="..",nc=1,cnonce="..",uri="/auth.cgi",response=".."`.
+4. HTTP 200 returns `jwt` and `authorization` response headers. Per the code comments,
+   201 means bad credentials and 500 a server error; the driver treats any non-200 as a
+   failed login.

@@ -9,14 +9,14 @@ devices on the room LAN, auto-starting on boot.
 > pending**; step 6 doubles as that first-contact check. The **EC20**'s VISCA control plane
 > (preset/jog/position/home over TCP `:5678`) **is hardware-verified** on a live camera;
 > absolute-degree moves await calibration, and AI **tracking** is CGI-only and needs one live
-> command probe — see `.claude/programs/ec20-api-discovery.md`. Deploy now; the pending pieces
+> command probe — see `docs/ec20-protocol-notes.md`. Deploy now; the pending pieces
 > land without redeploying the stack.
 
 ---
 
 ## 0. Prerequisites
 - Raspberry Pi 5, **Ubuntu 24.04 LTS (64-bit / arm64)**, on the **same LAN as the devices**.
-- Device IPs on that LAN (from the live bring-up): **Pearl `192.168.8.4`**, **EC20 `192.168.8.11`**
+- Device IPs on that LAN (from the live bring-up): **Pearl `192.0.2.4`**, **EC20 `192.0.2.11`**
   (EC20 default creds `admin`/`admin`; use the Pearl's real admin creds).
 - Give the Pi a **static IP or DHCP reservation** (it's the always-on room controller).
 - The Pi needs outbound TCP to the devices (`:80` for Pearl/EC20 CGI, `:5678` for EC20 VISCA). A plain
@@ -57,8 +57,8 @@ docker manifest inspect ghcr.io/dartmouth-openav/orchestrator:latest | grep -A2 
 cd demo
 cp .env.example .env
 # Edit .env — real IPs + creds:
-#   PEARL_HOST=192.168.8.4   PEARL_USERNAME=admin  PEARL_PASSWORD=<pearl pw>
-#   EC20_HOST=192.168.8.11   EC20_USERNAME=admin   EC20_PASSWORD=admin
+#   PEARL_HOST=192.0.2.4   PEARL_USERNAME=admin  PEARL_PASSWORD=<pearl pw>
+#   EC20_HOST=192.0.2.11   EC20_USERNAME=admin   EC20_PASSWORD=<ec20 password>
 ./generate-config.sh          # writes system-configs/smart-room-demo.json (GNU-sed safe)
 ```
 
@@ -82,13 +82,13 @@ curl -X PUT http://localhost:8080/api/systems/smart-room-demo/state \
   -H 'Content-Type: application/json' \
   -d '{"control_sets":{"recording":{"controls":{"record":{"value":false}}}}}'
 ```
-Or hit the microservice directly: `curl http://localhost:8081/admin:<pw>@192.168.8.4/healthcheck` → `"true"`.
+Or hit the microservice directly: `curl http://localhost:8081/admin:<pw>@192.0.2.4/healthcheck` → `"true"`.
 
 **EC20 (VISCA now; tracking after driver finish)** — direct microservice calls:
 ```bash
-curl http://localhost:8082/admin:admin@192.168.8.11/healthcheck        # VISCA version probe -> "true"
-curl -X PUT http://localhost:8082/admin:admin@192.168.8.11/preset/1    # camera physically moves
-curl http://localhost:8082/admin:admin@192.168.8.11/ptzposition        # {pan_units,tilt_units,zoom_units}
+curl http://localhost:8082/admin:<password>@192.0.2.11/healthcheck        # VISCA version probe -> "true"
+curl -X PUT http://localhost:8082/admin:<password>@192.0.2.11/preset/1    # camera physically moves
+curl http://localhost:8082/admin:<password>@192.0.2.11/ptzposition        # {pan_units,tilt_units,zoom_units}
 ```
 
 ## 7. openav-mcp (the AI layer)
@@ -102,7 +102,7 @@ cat > .env <<'EOF'
 OPENAV_ORCHESTRATOR_URL=http://localhost:8080
 OPENAV_PEARL_URL=http://localhost:8081
 OPENAV_EC20_URL=http://localhost:8082
-OPENAV_DEVICES=[{"alias":"room-pearl","host":"192.168.8.4","username":"admin","password":"<pearl pw>","kind":"pearl"},{"alias":"room-cam","host":"192.168.8.11","username":"admin","password":"admin","kind":"ec20"}]
+OPENAV_DEVICES=[{"alias":"room-pearl","host":"192.0.2.4","username":"admin","password":"<pearl pw>","kind":"pearl"},{"alias":"room-cam","host":"192.0.2.11","username":"admin","password":"admin","kind":"ec20"}]
 EOF
 chmod 600 .env                    # it holds device credentials
 # edit .env to put the real Pearl password in, then load it into this shell:
@@ -143,7 +143,7 @@ passwords never reach the model.
 
 ## Troubleshooting
 - **`orchestrator` exits / "exec format error"** → it's amd64-only; do step 3's binfmt + platform pin.
-- **Microservice can't reach a device (dial timeout)** → confirm the Pi is on `192.168.8.x` and can
+- **Microservice can't reach a device (dial timeout)** → confirm the Pi is on `192.0.2.x` and can
   `ping`/`curl` the device IP directly; check the device is powered and on-network.
 - **EC20 calls hang** → the CGI/lighttpd plane can wedge under repeated hung requests; power-cycle the
   camera. (VISCA on `:5678` is unaffected.)

@@ -107,13 +107,13 @@ Sony/DSP servers at once (see `silkroute` `MCPConfig.servers`). The `--mock-mcp`
 | EC20 Go microservice | ✅ **Hybrid driver — redesigned onto the real control planes** (the old `/api/*` REST model was wrong): **VISCA-over-IP (raw, TCP :5678)** for PTZ/presets/home/jog/position + **CGI** (`auth.cgi` session + `ptzctrl.cgi`/`param.cgi`) for AI tracking + status. 70 tests. **2 CONFIRM-ON-HARDWARE items remain** — see next sprint below. |
 | `openav-mcp` (MCP face) | ✅ Built, 39 tests + ruff clean. Exposes `ec20_jog` + `ec20_preset_save`; ranges schema-enforced. |
 | SilkRoute orchestration | ✅ N-server bridge + fit-to-hardware routing shipped; round-trip to openav-mcp verified. |
-| Live hardware run | ⛳ Needs the devices on the `192.168.8.x` LAN (EC20 `.8.11`, Pearl `.8.4`) — see next sprint. |
+| Live hardware run | ⛳ Needs the devices on the `192.0.2.x` LAN (EC20 `192.0.2.11`, Pearl `192.0.2.4`) — see next sprint. |
 | Cloud model (better tool-calling than a 14B) | Set `SILKROUTE_OPENROUTER_API_KEY` and `--model deepseek/deepseek-v3.2` (or Claude/GPT/Gemini via OpenRouter — model-agnostic). |
 
-## Next Sprint — live hardware bring-up (all gated on a box on the `192.168.8.x` LAN)
+## Next Sprint — live hardware bring-up (all gated on a box on the `192.0.2.x` LAN)
 
 The whole software stack is built, DA-reviewed, and on `main`. Everything below needs the devices
-powered + reachable (**EC20 `192.168.8.11`** admin/admin, **Pearl Mini `192.168.8.4`**). The two EC20
+powered + reachable (**EC20 `192.0.2.11`** its admin credentials, **Pearl Mini `192.0.2.4`**). The two EC20
 unknowns are each isolated to **one function**, so confirming them is a one-line change.
 
 1. **EC20 live end-to-end + the 2 CONFIRM-ON-HARDWARE items.**
@@ -125,9 +125,9 @@ unknowns are each isolated to **one function**, so confirming them is a one-line
    - **PTZ degree calibration** — `panUnitsPerDegree`/`tiltUnitsPerDegree` in `driver.go` are PLACEHOLDER
      (`14.0`). Drive to known references, read `/ptzposition`, set the measured units-per-degree. (Presets +
      jog + tracking work *without* this; it only gates absolute-degree `ec20_ptz`.)
-   - Drive it: `curl -X PUT http://localhost:8082/admin:admin@192.168.8.11/preset/1` (camera should move),
+   - Drive it: `curl -X PUT http://localhost:8082/admin:<password>@192.0.2.11/preset/1` (camera should move),
      `.../jog/up/10`, `.../tracking/enable -d '"presenter"'`, `.../status`.
-2. **Pearl Mini live** (`192.168.8.4`): `curl -m8 http://192.168.8.4/api/v2.0/device` → verify auth type
+2. **Pearl Mini live** (`192.0.2.4`): `curl -m8 http://192.0.2.4/api/v2.0/device` → verify auth type
    (Basic vs Digest; if Digest, port the EC20 fix to `openav-epiphan-pearl/source/driver.go`), then drive
    recording start→stop end-to-end.
 3. **Deploy the full stack on the Raspberry Pi 5** — follow **[`demo/DEPLOY-RPI5.md`](demo/DEPLOY-RPI5.md)**.
