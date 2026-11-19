@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 go build -tags timetzdata -o /go/bin/microservice
 RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
     && setcap 'cap_net_bind_service=+ep' /go/bin/microservice
 
-FROM alpine:3.23@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # Pick up Alpine security fixes released after the base image was built (e.g. zlib).
 RUN apk upgrade --no-cache && adduser -D -H -u 10001 svc
 COPY --from=builder /go/bin/microservice /usr/local/bin/microservice
